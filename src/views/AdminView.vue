@@ -1,13 +1,14 @@
 <template>
   <div class="layout">
-    <!-- ===== 侧边栏 ===== -->
     <aside class="sidebar">
       <div class="logo">
         <el-icon class="logo-icon"><Cpu /></el-icon>
         <span>数字孪生平台</span>
       </div>
+
       <el-menu
         :default-active="activeMenu"
+        :default-openeds="[]"
         class="side-menu"
         background-color="transparent"
         text-color="#a0b4cc"
@@ -16,15 +17,25 @@
       >
         <el-menu-item index="experiment">
           <el-icon><Operation /></el-icon>
-          <span>实验管理</span>
+          <span>{{ isAdmin ? '实验审批与管理' : '我的实验' }}</span>
         </el-menu-item>
-        <el-menu-item index="simulation">
+
+        <el-menu-item index="simulation" :disabled="!canOpenSimulationMenu">
           <el-icon><MagicStick /></el-icon>
           <span>仿真沙盒</span>
         </el-menu-item>
+
+        <el-menu-item v-if="isAdmin" index="dashboard">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>监控统计</span>
+        </el-menu-item>
+
+        <el-menu-item v-if="isAdmin" index="dataset">
+          <el-icon><Files /></el-icon>
+          <span>数据集维护</span>
+        </el-menu-item>
       </el-menu>
 
-      <!-- 返回主页 / 退出 -->
       <div class="sidebar-footer">
         <el-button class="home-btn" size="small" @click="goHome">
           <el-icon><House /></el-icon> 返回主页
@@ -35,9 +46,7 @@
       </div>
     </aside>
 
-    <!-- ===== 主区域 ===== -->
     <div class="main-wrapper">
-      <!-- 顶部标题栏 -->
       <header class="topbar">
         <div class="topbar-title">
           <el-icon><Monitor /></el-icon>
@@ -47,33 +56,56 @@
           <span class="topbar-user">
             <el-icon><User /></el-icon> {{ username }}
           </span>
+          <el-tag :type="isAdmin ? 'warning' : 'success'" effect="dark" round>
+            {{ roleDisplay }}
+          </el-tag>
           <el-tag type="success" effect="dark" round>系统运行中</el-tag>
           <span class="topbar-time">{{ currentTime }}</span>
         </div>
       </header>
 
       <main class="content">
-
-        <!-- ===== 实验数据管理 ===== -->
         <section class="card" v-if="activeMenu === 'experiment'">
-          <div class="card-header">
-            <span class="card-title">
-              <el-icon><List /></el-icon> 实验数据管理
-            </span>
+          <div class="card-header card-header-wrap">
+            <div>
+              <span class="card-title">
+                <el-icon><List /></el-icon>
+                {{ isAdmin ? '实验审批与管理' : '我的实验申请' }}
+              </span>
+              <p class="card-subtitle">
+                {{ isAdmin
+                  ? '管理员可查看全部实验，并对待审批实验执行通过或驳回。'
+                  : '普通用户只能对草稿/驳回实验编辑或提交审批，只有审批通过后才能发起仿真。' }}
+              </p>
+            </div>
             <div class="card-actions">
               <el-input
                 v-model="searchName"
                 placeholder="按名称搜索..."
-                style="width:200px; margin-right:12px;"
+                style="width: 200px"
                 clearable
+                :prefix-icon="Search"
                 @clear="onSearch"
                 @keyup.enter="onSearch"
-                prefix-icon="Search"
               />
+              <el-select
+                v-model="statusFilter"
+                placeholder="状态筛选"
+                clearable
+                style="width: 160px"
+                @change="onStatusFilterChange"
+              >
+                <el-option
+                  v-for="opt in STATUS_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
               <el-select
                 v-model="listSort"
                 placeholder="排序方式"
-                style="width:168px; margin-right:12px;"
+                style="width: 168px"
                 @change="onSortChange"
               >
                 <el-option
@@ -83,9 +115,8 @@
                   :value="opt.value"
                 />
               </el-select>
-              <el-button type="primary" :icon="Plus" @click="openCreate">
-                新增实验
-              </el-button>
+              <el-button :icon="Refresh" @click="fetchList">刷新</el-button>
+              <el-button type="primary" :icon="Plus" @click="openCreate">新增实验</el-button>
             </div>
           </div>
 
@@ -93,33 +124,101 @@
             :data="experiments"
             v-loading="loading"
             stripe
-            style="width:100%"
+            style="width: 100%"
             :header-cell-style="{ background: '#0d1f35', color: '#7ab3d0' }"
             :row-style="{ background: '#0a1828' }"
             :cell-style="{ color: '#c8dff0', borderColor: '#1e3a54' }"
           >
             <el-table-column prop="id" label="ID" width="70" />
             <el-table-column prop="name" label="实验名称" min-width="150" show-overflow-tooltip />
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <el-tag :type="statusTagType(row.status)" effect="dark" round>
+                  {{ statusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="实验动物" width="100">
               <template #default="{ row }">{{ animalLabel(row.animalType) }}</template>
             </el-table-column>
-            <el-table-column prop="chemicalName"  label="化学物质" width="130" show-overflow-tooltip />
-            <el-table-column prop="indicatorName" label="观测指标" width="140" show-overflow-tooltip />
-            <el-table-column prop="description"   label="说明"    min-width="160" show-overflow-tooltip />
-            <el-table-column prop="createdTime" label="创建时间" width="175">
-              <template #default="{ row }">{{ formatTime(row.createdTime) }}</template>
+            <el-table-column prop="chemicalName" label="化学物质" width="130" show-overflow-tooltip />
+            <el-table-column prop="indicatorName" label="观测指标" width="150" show-overflow-tooltip />
+            <el-table-column prop="reviewComment" label="审批意见" min-width="100" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.reviewComment || '-' }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="220" fixed="right">
+            <el-table-column label="时间" width="160"> 
               <template #default="{ row }">
-                <el-button size="small" type="success" text @click="launchSimFromExp(row)">
-                  <el-icon><MagicStick /></el-icon> 发起仿真
-                </el-button>
-                <el-button size="small" type="primary" text @click="openEdit(row)">
-                  <el-icon><Edit /></el-icon> 编辑
-                </el-button>
-                <el-button size="small" type="danger" text @click="handleDelete(row)">
-                  <el-icon><Delete /></el-icon> 删除
-                </el-button>
+                <div class="time-cell" style="font-size: 11px; line-height: 1.2;">
+                  <div style="color: #7ab3d0">创建: {{ formatTime(row.createdTime).slice(5,16) }}</div>
+                  <div style="color: #5a8fab">更新: {{ formatTime(row.updatedTime).slice(5,16) }}</div>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" min-width="200" fixed="right">
+              <template #default="{ row }">
+                <div class="action-group">
+                  <el-button
+                    v-if="canLaunchSimulation(row)"
+                    size="small"
+                    type="success"
+                    text
+                    @click="launchSimFromExp(row)"
+                  >
+                    <el-icon><MagicStick /></el-icon> 发起仿真
+                  </el-button>
+
+                  <el-button
+                    v-if="canEditRow(row)"
+                    size="small"
+                    type="primary"
+                    text
+                    @click="openEdit(row)"
+                  >
+                    <el-icon><Edit /></el-icon> 编辑
+                  </el-button>
+
+                  <el-button
+                    v-if="canDeleteRow(row)"
+                    size="small"
+                    type="danger"
+                    text
+                    @click="handleDelete(row)"
+                  >
+                    <el-icon><Delete /></el-icon> 删除
+                  </el-button>
+
+                  <el-button
+                    v-if="canSubmitRow(row)"
+                    size="small"
+                    type="warning"
+                    text
+                    @click="submitExperiment(row)"
+                  >
+                    <el-icon><Upload /></el-icon> 提交审批
+                  </el-button>
+
+                  <el-button
+                    v-if="canApproveRow(row)"
+                    size="small"
+                    type="success"
+                    text
+                    @click="approveExperiment(row)"
+                  >
+                    <el-icon><Select /></el-icon> 通过
+                  </el-button>
+
+                  <el-button
+                    v-if="canRejectRow(row)"
+                    size="small"
+                    type="warning"
+                    text
+                    @click="rejectExperiment(row)"
+                  >
+                    <el-icon><CloseBold /></el-icon> 驳回
+                  </el-button>
+
+                  <span v-if="!hasAnyAction(row)" class="action-placeholder">当前状态无可用操作</span>
+                </div>
               </template>
             </el-table-column>
           </el-table>
@@ -138,11 +237,8 @@
           </div>
         </section>
 
-        <!-- ===== 数字孪生仿真沙盒 ===== -->
         <section v-if="activeMenu === 'simulation'" class="sim-section">
-          <el-row :gutter="20" style="height:100%">
-
-            <!-- 左侧：参数设置卡片 -->
+          <el-row :gutter="20" style="height: 100%">
             <el-col :span="9">
               <el-card class="sim-card" shadow="never">
                 <template #header>
@@ -152,6 +248,16 @@
                   </div>
                 </template>
 
+                <el-alert
+                  v-if="!isAdmin"
+                  class="sim-alert"
+                  type="info"
+                  :closable="false"
+                  show-icon
+                  :title="simulationAlertTitle"
+                  :description="simulationAlertDescription"
+                />
+
                 <el-form
                   ref="simFormRef"
                   :model="simForm"
@@ -159,30 +265,30 @@
                   label-position="top"
                   class="sim-form"
                 >
-                  <!-- 目标物种 -->
+                  <el-form-item label="关联实验">
+                    <el-input :model-value="linkedExperimentLabel" disabled />
+                  </el-form-item>
+
                   <el-form-item label="目标物种" prop="animalType">
-                    <el-select v-model="simForm.animalType" placeholder="选择物种" style="width:100%">
-                      <el-option label="🐭 小白鼠（MOUSE）"  value="MOUSE"  />
-                      <el-option label="🐰 兔子（RABBIT）"   value="RABBIT" />
-                      <el-option label="🐸 青蛙（FROG）"     value="FROG"   />
+                    <el-select v-model="simForm.animalType" placeholder="选择物种" style="width: 100%">
+                      <el-option label="🐭 小白鼠（MOUSE）" value="MOUSE" />
+                      <el-option label="🐰 兔子（RABBIT）" value="RABBIT" />
+                      <el-option label="🐸 青蛙（FROG）" value="FROG" />
                     </el-select>
                   </el-form-item>
 
-                  <!-- 化学物质（与训练语料一致的下拉） -->
                   <el-form-item label="化学物质名称" prop="chemicalName">
-                    <el-select v-model="simForm.chemicalName" placeholder="选择化学物质" style="width:100%" filterable>
+                    <el-select v-model="simForm.chemicalName" placeholder="选择化学物质" style="width: 100%" filterable>
                       <el-option v-for="c in CHEMICAL_OPTIONS" :key="c" :label="c" :value="c" />
                     </el-select>
                   </el-form-item>
 
-                  <!-- 观测指标 -->
                   <el-form-item label="观测指标" prop="indicatorName">
-                    <el-select v-model="simForm.indicatorName" placeholder="选择指标名称" style="width:100%">
+                    <el-select v-model="simForm.indicatorName" placeholder="选择指标名称" style="width: 100%">
                       <el-option v-for="ind in INDICATOR_OPTIONS" :key="ind" :label="ind" :value="ind" />
                     </el-select>
                   </el-form-item>
 
-                  <!-- 环境温度区间 -->
                   <el-form-item label="环境温度筛选范围（℃）" prop="tempRange">
                     <div class="slider-wrap">
                       <el-slider
@@ -200,16 +306,14 @@
                     </div>
                   </el-form-item>
 
-                  <!-- 算法模型 -->
                   <el-form-item label="仿真算法模型" prop="algorithmModel">
-                    <el-select v-model="simForm.algorithmModel" placeholder="选择算法" style="width:100%">
-                      <el-option label="📈 简单线性回归（LINEAR）"        value="LINEAR"      />
-                      <el-option label="📉 二次多项式回归（POLYNOMIAL）"  value="POLYNOMIAL"  />
+                    <el-select v-model="simForm.algorithmModel" placeholder="选择算法" style="width: 100%">
+                      <el-option label="📈 简单线性回归（LINEAR）" value="LINEAR" />
+                      <el-option label="📉 二次多项式回归（POLYNOMIAL）" value="POLYNOMIAL" />
                       <el-option label="🔬 受体饱和对数回归（LOGARITHMIC）" value="LOGARITHMIC" />
                     </el-select>
                   </el-form-item>
 
-                  <!-- 目标预测剂量 -->
                   <el-form-item label="目标预测剂量（mg/kg）" prop="targetDosage">
                     <el-input-number
                       v-model="simForm.targetDosage"
@@ -217,7 +321,7 @@
                       :precision="3"
                       :step="0.5"
                       controls-position="right"
-                      style="width:100%"
+                      style="width: 100%"
                     />
                   </el-form-item>
 
@@ -225,6 +329,7 @@
                     class="sim-run-btn"
                     type="primary"
                     :loading="simLoading"
+                    :disabled="!canRunCurrentSimulation"
                     @click="runSimulation"
                   >
                     <el-icon v-if="!simLoading"><VideoPlay /></el-icon>
@@ -234,9 +339,8 @@
               </el-card>
             </el-col>
 
-            <!-- 右侧：仿真结果卡片 -->
             <el-col :span="15">
-              <el-card class="sim-card" shadow="never" style="height:100%">
+              <el-card class="sim-card" shadow="never" style="height: 100%">
                 <template #header>
                   <div class="sim-card-header">
                     <el-icon class="sim-card-icon"><TrendCharts /></el-icon>
@@ -244,14 +348,15 @@
                   </div>
                 </template>
 
-                <!-- 空态提示 -->
                 <div v-if="!simResult && !simLoading" class="sim-empty">
                   <el-icon class="sim-empty-icon"><MagicStick /></el-icon>
-                  <p>请在左侧配置参数后</p>
-                  <p>点击「启动数字孪生计算」</p>
+                  <p v-if="isAdmin">请在左侧配置参数后点击「启动数字孪生计算」</p>
+                  <template v-else>
+                    <p>请先从已审批通过的实验中进入仿真</p>
+                    <p>草稿、待审批、已驳回实验均不可直接仿真</p>
+                  </template>
                 </div>
 
-                <!-- 加载中 -->
                 <div v-if="simLoading" class="sim-loading">
                   <div class="loading-rings">
                     <div class="ring ring-1" />
@@ -261,9 +366,7 @@
                   <p class="loading-text">数字孪生引擎计算中...</p>
                 </div>
 
-                <!-- 结果展示 -->
                 <div v-if="simResult && !simLoading" class="sim-result">
-                  <!-- 核心指标 -->
                   <div class="result-peak">
                     <div class="result-peak-label">
                       预测指标：{{ simResult.indicatorName || simForm.indicatorName || '生理指标' }}
@@ -274,11 +377,10 @@
                     </div>
                     <div class="result-meta">
                       <el-tag size="small" type="success" effect="dark">{{ animalLabel(simResult.targetAnimal) }}</el-tag>
-                      <el-tag size="small" type="info"    effect="dark">{{ simResult.targetChemical }}</el-tag>
+                      <el-tag size="small" type="info" effect="dark">{{ simResult.targetChemical }}</el-tag>
                       <el-tag size="small" type="warning" effect="dark">{{ simResult.selectedModel }}</el-tag>
                     </div>
                   </div>
-                  <!-- 衰减曲线图 -->
                   <div ref="simChartRef" class="sim-chart-box" />
                 </div>
               </el-card>
@@ -286,10 +388,131 @@
           </el-row>
         </section>
 
+        <section v-if="activeMenu === 'dashboard' && isAdmin" class="card">
+          <div class="card-header card-header-wrap">
+            <div>
+              <span class="card-title">
+                <el-icon><DataAnalysis /></el-icon> 监控统计
+              </span>
+              <p class="card-subtitle">管理员可查看平台用户、仿真与审批核心指标。</p>
+            </div>
+            <div class="card-actions">
+              <el-button :icon="Refresh" @click="fetchDashboardSummary">刷新</el-button>
+            </div>
+          </div>
+
+          <div v-loading="dashboardLoading" class="summary-grid">
+            <div class="summary-card">
+              <div class="summary-label">用户总数</div>
+              <div class="summary-value">{{ dashboardSummary.totalUsers ?? 0 }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">累计仿真次数</div>
+              <div class="summary-value">{{ dashboardSummary.totalSimulations ?? 0 }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">近一周仿真</div>
+              <div class="summary-value">{{ dashboardSummary.weeklySimulations ?? 0 }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">待审批实验</div>
+              <div class="summary-value">{{ dashboardSummary.pendingExperimentApprovals ?? 0 }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">已通过实验</div>
+              <div class="summary-value">{{ dashboardSummary.approvedExperiments ?? 0 }}</div>
+            </div>
+            <div class="summary-card">
+              <div class="summary-label">替代率</div>
+              <div class="summary-value">{{ formatPercent(dashboardSummary.replacementRate) }}</div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="activeMenu === 'dataset' && isAdmin" class="card">
+          <div class="card-header card-header-wrap">
+            <div>
+              <span class="card-title">
+                <el-icon><Files /></el-icon> 训练数据集维护
+              </span>
+              <p class="card-subtitle">管理员可维护算法训练语料数据。</p>
+            </div>
+            <div class="card-actions">
+              <el-select v-model="datasetFilters.animalType" clearable placeholder="物种" style="width: 140px" @change="onDatasetFilterChange">
+                <el-option label="小白鼠" value="MOUSE" />
+                <el-option label="兔子" value="RABBIT" />
+                <el-option label="青蛙" value="FROG" />
+              </el-select>
+              <el-input
+                v-model="datasetFilters.chemicalName"
+                clearable
+                placeholder="化学物质"
+                style="width: 180px"
+                @clear="onDatasetFilterChange"
+                @keyup.enter="onDatasetFilterChange"
+              />
+              <el-input
+                v-model="datasetFilters.indicatorName"
+                clearable
+                placeholder="观测指标"
+                style="width: 180px"
+                @clear="onDatasetFilterChange"
+                @keyup.enter="onDatasetFilterChange"
+              />
+              <el-button :icon="Refresh" @click="fetchDatasetList">刷新</el-button>
+              <el-button type="primary" :icon="Plus" @click="openDatasetCreate">新增数据</el-button>
+            </div>
+          </div>
+
+          <el-table
+            :data="datasets"
+            v-loading="datasetLoading"
+            stripe
+            style="width: 100%"
+            :header-cell-style="{ background: '#0d1f35', color: '#7ab3d0' }"
+            :row-style="{ background: '#0a1828' }"
+            :cell-style="{ color: '#c8dff0', borderColor: '#1e3a54' }"
+          >
+            <el-table-column prop="id" label="ID" width="70" />
+            <el-table-column label="物种" width="110">
+              <template #default="{ row }">{{ animalLabel(row.animalType) }}</template>
+            </el-table-column>
+            <el-table-column prop="chemicalName" label="化学物质" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="indicatorName" label="观测指标" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="dosage" label="剂量(mg/kg)" width="120" />
+            <el-table-column prop="indicatorValue" label="指标值" width="120" />
+            <el-table-column prop="temperature" label="温度(℃)" width="100" />
+            <el-table-column label="入库时间" width="175">
+              <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="180" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" type="primary" text @click="openDatasetEdit(row)">
+                  <el-icon><Edit /></el-icon> 编辑
+                </el-button>
+                <el-button size="small" type="danger" text @click="handleDatasetDelete(row)">
+                  <el-icon><Delete /></el-icon> 删除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div class="table-pagination">
+            <el-pagination
+              v-model:current-page="datasetPageNum"
+              v-model:page-size="datasetPageSize"
+              :total="datasetTotal"
+              :page-sizes="[10, 20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              background
+              @size-change="onDatasetPageSizeChange"
+              @current-change="fetchDatasetList"
+            />
+          </div>
+        </section>
       </main>
     </div>
 
-    <!-- ===== 新增 / 编辑对话框 ===== -->
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑实验' : '新增实验'"
@@ -308,19 +531,19 @@
           <el-input v-model="form.name" placeholder="方案名称，如：小鼠乙醇肝毒性初筛" />
         </el-form-item>
         <el-form-item label="实验动物" prop="animalType">
-          <el-select v-model="form.animalType" placeholder="选择实验动物" style="width:100%">
+          <el-select v-model="form.animalType" placeholder="选择实验动物" style="width: 100%">
             <el-option label="小白鼠" value="MOUSE" />
-            <el-option label="兔子"   value="RABBIT" />
-            <el-option label="青蛙"   value="FROG" />
+            <el-option label="兔子" value="RABBIT" />
+            <el-option label="青蛙" value="FROG" />
           </el-select>
         </el-form-item>
         <el-form-item label="化学物质" prop="chemicalName">
-          <el-select v-model="form.chemicalName" placeholder="选择化学物质" style="width:100%">
+          <el-select v-model="form.chemicalName" placeholder="选择化学物质" style="width: 100%">
             <el-option v-for="c in CHEMICAL_OPTIONS" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
         <el-form-item label="观测指标" prop="indicatorName">
-          <el-select v-model="form.indicatorName" placeholder="选择观测指标" style="width:100%">
+          <el-select v-model="form.indicatorName" placeholder="选择观测指标" style="width: 100%">
             <el-option v-for="ind in INDICATOR_OPTIONS" :key="ind" :label="ind" :value="ind" />
           </el-select>
         </el-form-item>
@@ -336,53 +559,156 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="datasetDialogVisible"
+      :title="datasetIsEdit ? '编辑数据集' : '新增数据集'"
+      width="560px"
+      :close-on-click-modal="false"
+      class="dark-dialog"
+    >
+      <el-form
+        ref="datasetFormRef"
+        :model="datasetForm"
+        :rules="datasetRules"
+        label-width="110px"
+        label-position="left"
+      >
+        <el-form-item label="实验物种" prop="animalType">
+          <el-select v-model="datasetForm.animalType" placeholder="选择实验物种" style="width: 100%">
+            <el-option label="小白鼠" value="MOUSE" />
+            <el-option label="兔子" value="RABBIT" />
+            <el-option label="青蛙" value="FROG" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="化学物质" prop="chemicalName">
+          <el-select v-model="datasetForm.chemicalName" placeholder="选择化学物质" style="width: 100%" filterable>
+            <el-option v-for="c in CHEMICAL_OPTIONS" :key="c" :label="c" :value="c" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="给药剂量" prop="dosage">
+          <el-input-number v-model="datasetForm.dosage" :min="0" :precision="3" :step="0.1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="观测指标" prop="indicatorName">
+          <el-select v-model="datasetForm.indicatorName" placeholder="选择观测指标" style="width: 100%">
+            <el-option v-for="ind in INDICATOR_OPTIONS" :key="ind" :label="ind" :value="ind" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="指标值" prop="indicatorValue">
+          <el-input-number v-model="datasetForm.indicatorValue" :precision="4" :step="0.1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="环境温度" prop="temperature">
+          <el-input-number v-model="datasetForm.temperature" :min="-50" :precision="2" :step="0.5" style="width: 100%" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="datasetDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="datasetSubmitting" @click="submitDatasetForm">
+          {{ datasetIsEdit ? '保存修改' : '确认新增' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import {
-  Plus, Edit, Delete, Refresh, Search, VideoPlay,
-  Cpu, Operation, TrendCharts, Monitor, List,
-  SwitchButton, User, MagicStick, House
+  Plus,
+  Edit,
+  Delete,
+  Refresh,
+  Search,
+  VideoPlay,
+  Cpu,
+  Operation,
+  TrendCharts,
+  Monitor,
+  List,
+  SwitchButton,
+  User,
+  MagicStick,
+  House,
+  Upload,
+  Select,
+  CloseBold,
+  DataAnalysis,
+  Files
 } from '@element-plus/icons-vue'
-import { experimentApi, simulationApi } from '../api/experiment.js'
+import {
+  adminDashboardApi,
+  adminDatasetApi,
+  adminExperimentApi,
+  experimentApi,
+  simulationApi
+} from '../api/experiment.js'
 
 const router = useRouter()
-const username = localStorage.getItem('dt_username') || 'admin'
+const username = localStorage.getItem('dt_username') || '未命名用户'
+const currentUserId = Number(localStorage.getItem('dt_userId') || 0)
+const currentRole = (localStorage.getItem('dt_role') || 'USER').toUpperCase()
+const isAdmin = computed(() => currentRole === 'ADMIN')
+const roleDisplay = computed(() => (isAdmin.value ? '管理员' : '普通用户'))
 
-/** 化学物质下拉（与 dataset_raw 训练语料一致） */
 const CHEMICAL_OPTIONS = ['乙醇', '丙酮', '十二烷基硫酸钠', '二甲苯']
-
-/** 观测指标下拉（与 dataset_raw.indicator_name 枚举保持一致） */
 const INDICATOR_OPTIONS = ['血清ALT(U/L)', '角膜刺激评分', '皮肤反应指数', '体重变化率(%)']
+const STATUS_OPTIONS = [
+  { label: '草稿', value: 'DRAFT' },
+  { label: '待审批', value: 'PENDING' },
+  { label: '已通过', value: 'APPROVED' },
+  { label: '已驳回', value: 'REJECTED' }
+]
 
 const animalLabel = type => {
-  if (type === 'MOUSE')  return '小白鼠'
+  if (type === 'MOUSE') return '小白鼠'
   if (type === 'RABBIT') return '兔子'
-  if (type === 'FROG')   return '青蛙'
+  if (type === 'FROG') return '青蛙'
   return type || '-'
 }
+
+const statusLabel = status => {
+  if (status === 'DRAFT') return '草稿'
+  if (status === 'PENDING') return '待审批'
+  if (status === 'APPROVED') return '已通过'
+  if (status === 'REJECTED') return '已驳回'
+  return status || '-'
+}
+
+const statusTagType = status => {
+  if (status === 'DRAFT') return 'info'
+  if (status === 'PENDING') return 'warning'
+  if (status === 'APPROVED') return 'success'
+  if (status === 'REJECTED') return 'danger'
+  return 'info'
+}
+
+const isEditableStatus = status => status === 'DRAFT' || status === 'REJECTED'
+const isApprovedExperiment = row => row?.status === 'APPROVED'
+const isPendingExperiment = row => row?.status === 'PENDING'
+const isOwner = row => Boolean(row?.submittedBy) && row.submittedBy === currentUserId
 
 const goHome = () => {
   router.push('/')
 }
 
-// ─── 退出登录 ─────────────────────────────────────────
 const handleLogout = async () => {
   await ElMessageBox.confirm('确定退出登录吗？', '提示', {
-    confirmButtonText: '退出', cancelButtonText: '取消', type: 'warning'
+    confirmButtonText: '退出',
+    cancelButtonText: '取消',
+    type: 'warning'
   })
   localStorage.removeItem('dt_token')
   localStorage.removeItem('dt_username')
+  localStorage.removeItem('dt_userId')
+  localStorage.removeItem('dt_role')
   ElMessage.success('已退出登录')
   router.push('/login')
 }
 
-// ─── 时钟 ─────────────────────────────────────────────
 const currentTime = ref('')
 let clockTimer = null
 const updateTime = () => {
@@ -390,32 +716,55 @@ const updateTime = () => {
 }
 updateTime()
 clockTimer = setInterval(updateTime, 1000)
-onUnmounted(() => clearInterval(clockTimer))
 
-// ─── 导航 ─────────────────────────────────────────────
 const activeMenu = ref('experiment')
+const linkedSimulationExperiment = ref(null)
 
-/** 为 true 时表示当前切到仿真页来自「发起仿真」按钮，不清除 experimentId */
-let simLaunchFromTable = false
+const canOpenSimulationMenu = computed(() => true)
 
-const onMenuSelect = (index) => {
-  activeMenu.value = index
-  if (index === 'simulation' && !simLaunchFromTable) {
-    simForm.experimentId = null
+const canRunCurrentSimulation = computed(() => {
+  if (isAdmin.value) return true
+  return isApprovedExperiment(linkedSimulationExperiment.value)
+})
+
+const linkedExperimentLabel = computed(() => {
+  if (!linkedSimulationExperiment.value) {
+    return isAdmin.value ? '管理员模式：可直接配置仿真参数' : '当前未关联审批通过实验，可先浏览仿真沙盒'
   }
-  simLaunchFromTable = false
+  return `${linkedSimulationExperiment.value.name}（${statusLabel(linkedSimulationExperiment.value.status)}）`
+})
+
+const simulationAlertTitle = computed(() => {
+  if (isApprovedExperiment(linkedSimulationExperiment.value)) {
+    return '当前已关联审批通过的实验，可继续配置算法与剂量。'
+  }
+  return '普通用户可进入仿真沙盒，但仍只能提交已审批通过的实验。'
+})
+
+const simulationAlertDescription = computed(() => {
+  if (isApprovedExperiment(linkedSimulationExperiment.value)) {
+    return '已自动带入实验动物、化学物质和观测指标。'
+  }
+  return '你可以先查看和填写仿真参数；真正提交仿真前，仍需先在“我的实验”中选择状态为“已通过”的实验。'
+})
+
+const onMenuSelect = async index => {
+  activeMenu.value = index
+  if (index === 'dashboard' && isAdmin.value) {
+    await fetchDashboardSummary()
+  }
+  if (index === 'dataset' && isAdmin.value) {
+    await fetchDatasetList()
+  }
 }
 
-// ─── 实验列表 ─────────────────────────────────────────
 const experiments = ref([])
-
-// ─── 列表（服务端排序 + 分页）──────────────────────────
 const loading = ref(false)
 const searchName = ref('')
+const statusFilter = ref('')
 const pageNum = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
-/** 格式 sortBy|order，与后端 sortBy、order 对应 */
 const listSort = ref('id|asc')
 
 const SORT_OPTIONS = [
@@ -437,6 +786,8 @@ const fetchList = async () => {
     }
     const q = searchName.value?.trim()
     if (q) params.name = q
+    if (statusFilter.value) params.status = statusFilter.value
+
     const res = await experimentApi.list(params)
     if (res.code === 200 && res.data) {
       experiments.value = res.data.records ?? []
@@ -444,6 +795,7 @@ const fetchList = async () => {
     } else {
       experiments.value = []
       total.value = 0
+      ElMessage.error(res.message || '加载实验列表失败')
     }
   } catch {
     ElMessage.error('加载实验列表失败，请确认后端已启动')
@@ -462,41 +814,85 @@ const onSortChange = () => {
   fetchList()
 }
 
+const onStatusFilterChange = () => {
+  pageNum.value = 1
+  fetchList()
+}
+
 const onPageSizeChange = () => {
   pageNum.value = 1
   fetchList()
 }
 
-const formatTime = t => (t ? t.replace('T', ' ').slice(0, 19) : '-')
+const formatTime = t => (t ? String(t).replace('T', ' ').slice(0, 19) : '-')
+const formatPercent = value => (value == null ? '0%' : `${value}%`)
 
-// ─── 表单对话框 ───────────────────────────────────────
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const submitting = ref(false)
 const formRef = ref(null)
 const editId = ref(null)
 
-const form = reactive({ name: '', animalType: '', chemicalName: '', indicatorName: '', description: '' })
+const form = reactive({
+  name: '',
+  animalType: '',
+  chemicalName: '',
+  indicatorName: '',
+  description: ''
+})
+
 const rules = {
-  name:          [{ required: true, message: '请输入实验名称', trigger: 'blur' }],
-  animalType:    [{ required: true, message: '请选择实验动物', trigger: 'change' }],
-  chemicalName:  [{ required: true, message: '请选择化学物质', trigger: 'change' }],
+  name: [{ required: true, message: '请输入实验名称', trigger: 'blur' }],
+  animalType: [{ required: true, message: '请选择实验动物', trigger: 'change' }],
+  chemicalName: [{ required: true, message: '请选择化学物质', trigger: 'change' }],
   indicatorName: [{ required: true, message: '请选择观测指标', trigger: 'change' }]
 }
 
-const resetForm = () => Object.assign(form, { name: '', animalType: '', chemicalName: '', indicatorName: '', description: '' })
+const resetForm = () => {
+  Object.assign(form, {
+    name: '',
+    animalType: '',
+    chemicalName: '',
+    indicatorName: '',
+    description: ''
+  })
+  editId.value = null
+}
 
-const openCreate = () => { isEdit.value = false; resetForm(); dialogVisible.value = true }
+const openCreate = () => {
+  isEdit.value = false
+  resetForm()
+  dialogVisible.value = true
+}
+
+const canEditRow = row => isOwner(row) && isEditableStatus(row.status)
+const canDeleteRow = row => isOwner(row) && isEditableStatus(row.status)
+const canSubmitRow = row => isOwner(row) && isEditableStatus(row.status)
+const canApproveRow = row => isAdmin.value && isPendingExperiment(row)
+const canRejectRow = row => isAdmin.value && isPendingExperiment(row)
+const canLaunchSimulation = row => (isAdmin.value ? true : isApprovedExperiment(row))
+const hasAnyAction = row => [
+  canLaunchSimulation(row),
+  canEditRow(row),
+  canDeleteRow(row),
+  canSubmitRow(row),
+  canApproveRow(row),
+  canRejectRow(row)
+].some(Boolean)
 
 const openEdit = row => {
+  if (!canEditRow(row)) {
+    ElMessage.warning('当前实验状态不可编辑')
+    return
+  }
   isEdit.value = true
   editId.value = row.id
   Object.assign(form, {
-    name:          row.name,
-    animalType:    row.animalType,
-    chemicalName:  row.chemicalName,
+    name: row.name,
+    animalType: row.animalType,
+    chemicalName: row.chemicalName,
     indicatorName: row.indicatorName,
-    description:   row.description
+    description: row.description || ''
   })
   dialogVisible.value = true
 }
@@ -505,15 +901,17 @@ const submitForm = async () => {
   await formRef.value.validate()
   submitting.value = true
   try {
-    if (isEdit.value) {
-      await experimentApi.update(editId.value, { ...form })
-      ElMessage.success('实验信息已更新')
+    const res = isEdit.value
+      ? await experimentApi.update(editId.value, { ...form })
+      : await experimentApi.create({ ...form })
+
+    if (res.code === 200) {
+      ElMessage.success(isEdit.value ? '实验信息已更新' : '实验创建成功，当前状态为草稿')
+      dialogVisible.value = false
+      await fetchList()
     } else {
-      await experimentApi.create({ ...form })
-      ElMessage.success('实验创建成功')
+      ElMessage.error(res.message || '操作失败，请稍后重试')
     }
-    dialogVisible.value = false
-    fetchList()
   } catch {
     ElMessage.error('操作失败，请稍后重试')
   } finally {
@@ -522,88 +920,158 @@ const submitForm = async () => {
 }
 
 const handleDelete = async row => {
+  if (!canDeleteRow(row)) {
+    ElMessage.warning('当前实验状态不可删除')
+    return
+  }
   await ElMessageBox.confirm(
     `确定要删除实验「${row.name}」吗？此操作不可撤销。`,
     '二次确认',
     { confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning' }
   )
   try {
-    await experimentApi.remove(row.id)
-    ElMessage.success('删除成功')
-    await fetchList()
-    if (experiments.value.length === 0 && pageNum.value > 1) {
-      pageNum.value -= 1
+    const res = await experimentApi.remove(row.id)
+    if (res.code === 200) {
+      ElMessage.success('删除成功')
       await fetchList()
+      if (experiments.value.length === 0 && pageNum.value > 1) {
+        pageNum.value -= 1
+        await fetchList()
+      }
+    } else {
+      ElMessage.error(res.message || '删除失败')
     }
   } catch {
     ElMessage.error('删除失败')
   }
 }
 
-onMounted(async () => {
-  await fetchList()
-})
+const submitExperiment = async row => {
+  if (!canSubmitRow(row)) {
+    ElMessage.warning('只有草稿或已驳回实验可提交审批')
+    return
+  }
+  try {
+    const res = await experimentApi.submit(row.id)
+    if (res.code === 200) {
+      ElMessage.success('实验已提交审批')
+      await fetchList()
+    } else {
+      ElMessage.error(res.message || '提交审批失败')
+    }
+  } catch {
+    ElMessage.error('提交审批失败')
+  }
+}
 
-onUnmounted(() => {
-  simChartInstance?.dispose()
-  window.removeEventListener('resize', () => {})
-})
+const approveExperiment = async row => {
+  try {
+    const { value } = await ElMessageBox.prompt('可选填写审批意见', `通过实验「${row.name}」`, {
+      confirmButtonText: '通过',
+      cancelButtonText: '取消',
+      inputPlaceholder: '如：方案完整，可以进入仿真阶段',
+      inputValue: row.reviewComment || ''
+    })
+    const res = await adminExperimentApi.approve(row.id, value || '')
+    if (res.code === 200) {
+      ElMessage.success('已审批通过')
+      await fetchList()
+    } else {
+      ElMessage.error(res.message || '审批失败')
+    }
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      ElMessage.error('审批失败')
+    }
+  }
+}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 数字孪生仿真沙盒
-// ─────────────────────────────────────────────────────────────────────────────
+const rejectExperiment = async row => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入驳回原因', `驳回实验「${row.name}」`, {
+      confirmButtonText: '驳回',
+      cancelButtonText: '取消',
+      inputPlaceholder: '如：缺少实验说明或参数不完整',
+      inputValidator: val => (val && val.trim() ? true : '请填写驳回原因')
+    })
+    const res = await adminExperimentApi.reject(row.id, value.trim())
+    if (res.code === 200) {
+      ElMessage.success('已驳回实验')
+      await fetchList()
+    } else {
+      ElMessage.error(res.message || '驳回失败')
+    }
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      ElMessage.error('驳回失败')
+    }
+  }
+}
 
-const simFormRef  = ref(null)
+const simFormRef = ref(null)
 const simChartRef = ref(null)
-const simLoading  = ref(false)
-const simResult   = ref(null)
-let   simChartInstance = null
+const simLoading = ref(false)
+const simResult = ref(null)
+let simChartInstance = null
+const resizeChart = () => simChartInstance?.resize()
 
 const simForm = reactive({
-  experimentId:   null,
-  animalType:     '',
-  chemicalName:   '',
-  indicatorName:  '',
-  tempRange:      [15, 35],
+  experimentId: null,
+  animalType: '',
+  chemicalName: '',
+  indicatorName: '',
+  tempRange: [15, 35],
   algorithmModel: '',
-  targetDosage:   1.0
+  targetDosage: 1.0
 })
 
-// 温度滑块刻度
 const tempMarks = { 0: '0℃', 15: '15', 25: '25', 35: '35', 50: '50℃' }
 
 const simRules = {
-  animalType:     [{ required: true, message: '请选择目标物种',     trigger: 'change' }],
-  chemicalName:   [{ required: true, message: '请选择化学物质',     trigger: 'change' }],
-  indicatorName:  [{ required: true, message: '请选择观测指标',     trigger: 'change' }],
+  animalType: [{ required: true, message: '请选择目标物种', trigger: 'change' }],
+  chemicalName: [{ required: true, message: '请选择化学物质', trigger: 'change' }],
+  indicatorName: [{ required: true, message: '请选择观测指标', trigger: 'change' }],
   algorithmModel: [{ required: true, message: '请选择仿真算法模型', trigger: 'change' }],
-  targetDosage:   [{ required: true, message: '请输入目标预测剂量', trigger: 'change' }]
+  targetDosage: [{ required: true, message: '请输入目标预测剂量', trigger: 'change' }]
 }
 
-// 启动仿真
+const resetSimulationForm = () => {
+  simForm.experimentId = null
+  simForm.animalType = ''
+  simForm.chemicalName = ''
+  simForm.indicatorName = ''
+  simForm.tempRange = [15, 35]
+  simForm.algorithmModel = ''
+  simForm.targetDosage = 1.0
+  linkedSimulationExperiment.value = null
+  simResult.value = null
+}
+
 const runSimulation = async () => {
+  if (!canRunCurrentSimulation.value) {
+    ElMessage.warning('普通用户只能对审批通过的实验发起仿真')
+    return
+  }
+
   await simFormRef.value.validate()
   simLoading.value = true
-  simResult.value  = null
+  simResult.value = null
 
   try {
-    const userId = Number(localStorage.getItem('dt_userId') || 1)
     const res = await simulationApi.run({
-      userId,
-      experimentId:   simForm.experimentId ?? undefined,
-      animalType:     simForm.animalType,
-      chemicalName:   simForm.chemicalName,
-      indicatorName:  simForm.indicatorName,
-      minTemp:        simForm.tempRange[0],
-      maxTemp:        simForm.tempRange[1],
+      experimentId: simForm.experimentId ?? undefined,
+      animalType: simForm.animalType,
+      chemicalName: simForm.chemicalName,
+      indicatorName: simForm.indicatorName,
+      minTemp: simForm.tempRange[0],
+      maxTemp: simForm.tempRange[1],
       algorithmModel: simForm.algorithmModel,
-      targetDosage:   simForm.targetDosage
+      targetDosage: simForm.targetDosage
     })
 
     if (res.code === 200) {
       simResult.value = res.data
       ElMessage.success('仿真计算完成！')
-      // 等 DOM 渲染（v-if 使图表容器重新挂载），再多一帧确保尺寸计算完成
       await nextTick()
       requestAnimationFrame(() => {
         renderSimChart(Number(res.data.predictedValue), res.data.indicatorName || simForm.indicatorName)
@@ -618,21 +1086,16 @@ const runSimulation = async () => {
   }
 }
 
-/**
- * 以预测峰值为起点，使用指数衰减公式模拟 12 小时药效衰减曲线：
- *   y(t) = peak * e^(-λ * t)
- * λ = 0.12 约等于半衰期 5.8h，可根据业务调整
- */
 const renderSimChart = (peak, indicatorName) => {
   if (!simChartRef.value) return
   simChartInstance?.dispose()
   simChartInstance = echarts.init(simChartRef.value, 'dark')
 
-  const LAMBDA = 0.12       // 衰减速率常数
-  const HOURS  = 12         // 模拟总时长
-  const STEP   = 0.5        // 采样步长（h）
-  const xData  = []
-  const yData  = []
+  const LAMBDA = 0.12
+  const HOURS = 12
+  const STEP = 0.5
+  const xData = []
+  const yData = []
 
   for (let t = 0; t <= HOURS; t += STEP) {
     xData.push(`${t.toFixed(1)}h`)
@@ -646,7 +1109,7 @@ const renderSimChart = (peak, indicatorName) => {
       backgroundColor: '#0d2135',
       borderColor: '#1e4a6e',
       textStyle: { color: '#c8dff0' },
-      formatter: (params) => {
+      formatter: params => {
         const p = params[0]
         return `时间：${p.name}<br/>指标值：<b style="color:#4fc3f7">${p.value}</b>`
       }
@@ -655,7 +1118,7 @@ const renderSimChart = (peak, indicatorName) => {
     xAxis: {
       type: 'category',
       data: xData,
-      axisLine:  { lineStyle: { color: '#1e3a54' } },
+      axisLine: { lineStyle: { color: '#1e3a54' } },
       axisLabel: { color: '#4a7fa5', fontSize: 11, interval: 3 }
     },
     yAxis: {
@@ -685,12 +1148,9 @@ const renderSimChart = (peak, indicatorName) => {
       }
     }]
   })
-
-  window.addEventListener('resize', () => simChartInstance?.resize())
 }
 
-// 切换到 simulation 时若有结果则重渲图表
-watch(activeMenu, async (val) => {
+watch(activeMenu, async val => {
   if (val === 'simulation' && simResult.value) {
     await nextTick()
     requestAnimationFrame(() => {
@@ -702,20 +1162,208 @@ watch(activeMenu, async (val) => {
   }
 })
 
-// ─── 从实验列表「发起仿真」：带入动物、化学物质，并关联 experiment_id（不写实验名称到化学物质） ───
-const launchSimFromExp = (row) => {
-  simLaunchFromTable = true
-  simForm.experimentId   = row.id
-  simForm.animalType     = row.animalType
-  simForm.chemicalName   = row.chemicalName
-  simForm.indicatorName  = row.indicatorName
+const launchSimFromExp = row => {
+  if (!canLaunchSimulation(row)) {
+    ElMessage.warning('只有审批通过的实验才能发起仿真')
+    return
+  }
+  linkedSimulationExperiment.value = row
+  simForm.experimentId = row.id
+  simForm.animalType = row.animalType
+  simForm.chemicalName = row.chemicalName
+  simForm.indicatorName = row.indicatorName
   simForm.algorithmModel = ''
-  simForm.tempRange      = [15, 35]
-  simForm.targetDosage   = 1.0
-  simResult.value        = null
-  activeMenu.value       = 'simulation'
-  ElMessage.info(`已关联方案「${row.name}」，已带入动物、化学物质与观测指标，请设置算法与剂量后启动仿真`)
+  simForm.tempRange = [15, 35]
+  simForm.targetDosage = 1.0
+  simResult.value = null
+  activeMenu.value = 'simulation'
+  ElMessage.info(`已关联方案「${row.name}」，请设置算法与剂量后启动仿真`)
 }
+
+const dashboardLoading = ref(false)
+const dashboardSummary = reactive({
+  totalUsers: 0,
+  totalSimulations: 0,
+  weeklySimulations: 0,
+  pendingExperimentApprovals: 0,
+  approvedExperiments: 0,
+  replacementRate: 0
+})
+
+const fetchDashboardSummary = async () => {
+  if (!isAdmin.value) return
+  dashboardLoading.value = true
+  try {
+    const res = await adminDashboardApi.summary()
+    if (res.code === 200 && res.data) {
+      Object.assign(dashboardSummary, res.data)
+    } else {
+      ElMessage.error(res.message || '加载统计摘要失败')
+    }
+  } catch {
+    ElMessage.error('加载统计摘要失败')
+  } finally {
+    dashboardLoading.value = false
+  }
+}
+
+const datasets = ref([])
+const datasetLoading = ref(false)
+const datasetPageNum = ref(1)
+const datasetPageSize = ref(10)
+const datasetTotal = ref(0)
+const datasetFilters = reactive({
+  animalType: '',
+  chemicalName: '',
+  indicatorName: ''
+})
+
+const fetchDatasetList = async () => {
+  if (!isAdmin.value) return
+  datasetLoading.value = true
+  try {
+    const params = {
+      pageNum: datasetPageNum.value,
+      pageSize: datasetPageSize.value
+    }
+    if (datasetFilters.animalType) params.animalType = datasetFilters.animalType
+    if (datasetFilters.chemicalName?.trim()) params.chemicalName = datasetFilters.chemicalName.trim()
+    if (datasetFilters.indicatorName?.trim()) params.indicatorName = datasetFilters.indicatorName.trim()
+
+    const res = await adminDatasetApi.list(params)
+    if (res.code === 200 && res.data) {
+      datasets.value = res.data.records ?? []
+      datasetTotal.value = Number(res.data.total) || 0
+    } else {
+      ElMessage.error(res.message || '加载数据集失败')
+    }
+  } catch {
+    ElMessage.error('加载数据集失败')
+  } finally {
+    datasetLoading.value = false
+  }
+}
+
+const onDatasetFilterChange = () => {
+  datasetPageNum.value = 1
+  fetchDatasetList()
+}
+
+const onDatasetPageSizeChange = () => {
+  datasetPageNum.value = 1
+  fetchDatasetList()
+}
+
+const datasetDialogVisible = ref(false)
+const datasetIsEdit = ref(false)
+const datasetSubmitting = ref(false)
+const datasetEditId = ref(null)
+const datasetFormRef = ref(null)
+const datasetForm = reactive({
+  animalType: '',
+  chemicalName: '',
+  dosage: 0,
+  indicatorName: '',
+  indicatorValue: 0,
+  temperature: 25
+})
+
+const datasetRules = {
+  animalType: [{ required: true, message: '请选择实验物种', trigger: 'change' }],
+  chemicalName: [{ required: true, message: '请输入化学物质', trigger: 'blur' }],
+  dosage: [{ required: true, message: '请输入给药剂量', trigger: 'change' }],
+  indicatorName: [{ required: true, message: '请输入观测指标', trigger: 'blur' }],
+  indicatorValue: [{ required: true, message: '请输入指标值', trigger: 'change' }],
+  temperature: [{ required: true, message: '请输入环境温度', trigger: 'change' }]
+}
+
+const resetDatasetForm = () => {
+  Object.assign(datasetForm, {
+    animalType: '',
+    chemicalName: '',
+    dosage: 0,
+    indicatorName: '',
+    indicatorValue: 0,
+    temperature: 25
+  })
+  datasetEditId.value = null
+}
+
+const openDatasetCreate = () => {
+  datasetIsEdit.value = false
+  resetDatasetForm()
+  datasetDialogVisible.value = true
+}
+
+const openDatasetEdit = row => {
+  datasetIsEdit.value = true
+  datasetEditId.value = row.id
+  Object.assign(datasetForm, {
+    animalType: row.animalType,
+    chemicalName: row.chemicalName,
+    dosage: Number(row.dosage),
+    indicatorName: row.indicatorName,
+    indicatorValue: Number(row.indicatorValue),
+    temperature: Number(row.temperature)
+  })
+  datasetDialogVisible.value = true
+}
+
+const submitDatasetForm = async () => {
+  await datasetFormRef.value.validate()
+  datasetSubmitting.value = true
+  try {
+    const payload = { ...datasetForm }
+    const res = datasetIsEdit.value
+      ? await adminDatasetApi.update(datasetEditId.value, payload)
+      : await adminDatasetApi.create(payload)
+
+    if (res.code === 200) {
+      ElMessage.success(datasetIsEdit.value ? '数据集已更新' : '数据集已新增')
+      datasetDialogVisible.value = false
+      await fetchDatasetList()
+    } else {
+      ElMessage.error(res.message || '保存数据集失败')
+    }
+  } catch {
+    ElMessage.error('保存数据集失败')
+  } finally {
+    datasetSubmitting.value = false
+  }
+}
+
+const handleDatasetDelete = async row => {
+  await ElMessageBox.confirm(
+    `确定要删除数据集记录 #${row.id} 吗？`,
+    '二次确认',
+    { confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning' }
+  )
+  try {
+    const res = await adminDatasetApi.remove(row.id)
+    if (res.code === 200) {
+      ElMessage.success('数据集已删除')
+      await fetchDatasetList()
+    } else {
+      ElMessage.error(res.message || '删除数据集失败')
+    }
+  } catch {
+    ElMessage.error('删除数据集失败')
+  }
+}
+
+onMounted(async () => {
+  await fetchList()
+  if (isAdmin.value) {
+    await fetchDashboardSummary()
+  }
+  window.addEventListener('resize', resizeChart)
+})
+
+onUnmounted(() => {
+  clearInterval(clockTimer)
+  simChartInstance?.dispose()
+  window.removeEventListener('resize', resizeChart)
+})
 </script>
 
 <style>
@@ -727,18 +1375,24 @@ body {
 }
 
 .layout { display: flex; height: 100vh; overflow: hidden; }
-
-/* ─── 侧边栏 ─── */
 .sidebar {
-  width: 220px; min-width: 220px;
+  width: 220px;
+  min-width: 220px;
   background: linear-gradient(180deg, #0a1f38 0%, #071525 100%);
   border-right: 1px solid #1e3a54;
-  display: flex; flex-direction: column;
+  display: flex;
+  flex-direction: column;
 }
 .logo {
-  display: flex; align-items: center; gap: 10px;
-  padding: 22px 20px; font-size: 15px; font-weight: 700;
-  color: #4fc3f7; border-bottom: 1px solid #1e3a54; letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 20px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #4fc3f7;
+  border-bottom: 1px solid #1e3a54;
+  letter-spacing: 0.5px;
 }
 .logo-icon { font-size: 22px; }
 .side-menu { flex: 1; border-right: none !important; padding-top: 10px; }
@@ -771,14 +1425,16 @@ body {
 }
 .logout-btn:hover { background: rgba(255,100,100,0.1) !important; }
 
-/* ─── 主区域 ─── */
 .main-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
   height: 58px;
   background: linear-gradient(90deg, #0a1f38, #0d2a47);
   border-bottom: 1px solid #1e3a54;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 28px; flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  flex-shrink: 0;
 }
 .topbar-title { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; color: #e0f3ff; letter-spacing: 1px; }
 .topbar-info { display: flex; align-items: center; gap: 16px; }
@@ -786,15 +1442,18 @@ body {
 .topbar-time { font-size: 13px; color: #5a8fab; font-variant-numeric: tabular-nums; }
 .content { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
 
-/* ─── 通用卡片 ─── */
 .card {
   background: linear-gradient(135deg, #0d2135 0%, #091a2e 100%);
-  border: 1px solid #1e3a54; border-radius: 12px; padding: 20px 24px;
+  border: 1px solid #1e3a54;
+  border-radius: 12px;
+  padding: 20px 24px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.card-header-wrap { gap: 16px; flex-wrap: wrap; }
 .card-title { display: flex; align-items: center; gap: 6px; font-size: 15px; font-weight: 600; color: #a0c8e8; }
-.card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0; }
+.card-subtitle { margin-top: 8px; color: #6e98b8; font-size: 13px; line-height: 1.6; }
+.card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 
 .table-pagination {
   display: flex;
@@ -812,25 +1471,26 @@ body {
   color: #7ab3d0 !important;
 }
 
-/* ─── 表格 ─── */
 .el-table { background: transparent !important; border-radius: 8px; overflow: hidden; }
 .el-table tr { background: transparent !important; }
 .el-table--striped .el-table__body tr.el-table__row--striped td { background: rgba(255,255,255,0.025) !important; }
 .el-table__border-left-patch,.el-table__inner-wrapper::before,.el-table__inner-wrapper::after { display: none !important; }
 .el-table td, .el-table th { border-bottom: 1px solid #1a3550 !important; }
 
-/* ─── 对话框 ─── */
+.action-group { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.action-placeholder { color: #5a8fab; font-size: 12px; }
+
 .dark-dialog .el-dialog { background: #0d2135 !important; border: 1px solid #1e3a54; border-radius: 12px; }
 .dark-dialog .el-dialog__title { color: #c8dff0; }
 .dark-dialog .el-dialog__headerbtn .el-dialog__close { color: #5a8fab; }
 .dark-dialog .el-form-item__label { color: #7ab3d0; }
 .dark-dialog .el-input__wrapper,
 .dark-dialog .el-textarea__inner,
-.dark-dialog .el-select .el-input__wrapper { background: #061525 !important; box-shadow: 0 0 0 1px #1e3a54 inset !important; }
+.dark-dialog .el-select .el-input__wrapper,
+.dark-dialog .el-input-number .el-input__wrapper { background: #061525 !important; box-shadow: 0 0 0 1px #1e3a54 inset !important; }
 .dark-dialog .el-input__inner,.dark-dialog .el-textarea__inner { color: #c8dff0 !important; }
 .dark-dialog .el-dialog__footer { border-top: 1px solid #1e3a54; }
 
-/* ─── 全局 ─── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #07192b; }
 ::-webkit-scrollbar-thumb { background: #1e3a54; border-radius: 3px; }
@@ -838,17 +1498,9 @@ body {
 .el-button--primary { background-color: #1976a8 !important; border-color: #1976a8 !important; }
 .el-button--primary:hover { background-color: #4fc3f7 !important; border-color: #4fc3f7 !important; color: #061525 !important; }
 
-/* ─── 仿真沙盒布局 ─── */
-.sim-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
+.sim-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .sim-section .el-row { flex: 1; }
 .sim-section .el-col { display: flex; flex-direction: column; }
-
-/* Element Plus el-card 深色覆盖 */
 .sim-card {
   flex: 1;
   background: linear-gradient(135deg, #0d2135 0%, #091a2e 100%) !important;
@@ -861,14 +1513,9 @@ body {
   padding: 14px 20px;
 }
 .sim-card :deep(.el-card__body) { padding: 20px; height: calc(100% - 53px); }
-
-.sim-card-header {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 15px; font-weight: 600; color: #a0c8e8;
-}
+.sim-card-header { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: #a0c8e8; }
 .sim-card-icon { font-size: 18px; color: #4fc3f7; }
-
-/* 表单深色覆盖 */
+.sim-alert { margin-bottom: 16px; }
 .sim-form :deep(.el-form-item__label) { color: #7ab3d0; font-size: 13px; }
 .sim-form :deep(.el-input__wrapper),
 .sim-form :deep(.el-select .el-input__wrapper),
@@ -885,15 +1532,11 @@ body {
 .sim-form :deep(.el-input-number .el-input__inner) { color: #c8dff0 !important; }
 .sim-form :deep(.el-input-number__decrease),
 .sim-form :deep(.el-input-number__increase) { background: #0d2135 !important; border-color: #1e3a54 !important; color: #4fc3f7 !important; }
-
-/* 滑块 */
 .slider-wrap { padding: 0 4px; }
 .sim-form :deep(.el-slider__runway) { background: #1e3a54 !important; }
 .sim-form :deep(.el-slider__bar) { background: linear-gradient(90deg, #1565a8, #4fc3f7) !important; }
 .sim-form :deep(.el-slider__button) { border-color: #4fc3f7 !important; }
 .temp-range-label { text-align: center; font-size: 12px; color: #4fc3f7; margin-top: 8px; }
-
-/* 启动按钮 */
 .sim-run-btn {
   width: 100% !important;
   height: 46px !important;
@@ -904,39 +1547,40 @@ body {
   font-size: 15px !important;
   letter-spacing: 1px;
   box-shadow: 0 4px 20px rgba(79,195,247,0.25) !important;
-  transition: box-shadow 0.25s !important;
 }
-.sim-run-btn:hover {
-  background: linear-gradient(90deg, #1565a8, #4fc3f7) !important;
-  box-shadow: 0 6px 28px rgba(79,195,247,0.5) !important;
-}
-
-/* 空态 */
 .sim-empty {
-  display: flex; flex-direction: column; align-items: center;
-  justify-content: center; height: 100%; gap: 10px;
-  color: #2a4d6a; font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 10px;
+  color: #2a4d6a;
+  font-size: 14px;
+  text-align: center;
 }
 .sim-empty-icon { font-size: 52px; color: #1e3a54; }
-
-/* Loading 动画：三圈扩散 */
 .sim-loading {
-  display: flex; flex-direction: column; align-items: center;
-  justify-content: center; height: 100%; gap: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 24px;
 }
 .loading-rings { position: relative; width: 80px; height: 80px; }
 .ring {
-  position: absolute; border-radius: 50%; border: 2px solid transparent;
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid transparent;
   border-top-color: #4fc3f7;
   animation: spin 1.4s linear infinite;
 }
-.ring-1 { inset: 0;     animation-duration: 1.4s; }
-.ring-2 { inset: 10px;  animation-duration: 1.8s; border-top-color: #81c784; }
-.ring-3 { inset: 20px;  animation-duration: 2.2s; border-top-color: #ffb74d; }
+.ring-1 { inset: 0; animation-duration: 1.4s; }
+.ring-2 { inset: 10px; animation-duration: 1.8s; border-top-color: #81c784; }
+.ring-3 { inset: 20px; animation-duration: 2.2s; border-top-color: #ffb74d; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .loading-text { color: #4fc3f7; font-size: 14px; letter-spacing: 2px; }
-
-/* 结果展示 */
 .sim-result { display: flex; flex-direction: column; height: 100%; gap: 16px; }
 .result-peak {
   background: rgba(79,195,247,0.06);
@@ -947,7 +1591,8 @@ body {
 }
 .result-peak-label { font-size: 13px; color: #5a8fab; margin-bottom: 8px; letter-spacing: 1px; }
 .result-peak-value {
-  font-size: 40px; font-weight: 800;
+  font-size: 40px;
+  font-weight: 800;
   color: #4caf50;
   text-shadow: 0 0 20px rgba(76,175,80,0.4);
   line-height: 1.2;
@@ -955,4 +1600,18 @@ body {
 .result-unit { font-size: 16px; font-weight: 400; color: #5a8fab; margin-left: 6px; }
 .result-meta { display: flex; justify-content: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .sim-chart-box { flex: 1; min-height: 260px; }
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+.summary-card {
+  padding: 18px;
+  border-radius: 12px;
+  background: rgba(79,195,247,0.06);
+  border: 1px solid rgba(79,195,247,0.18);
+}
+.summary-label { color: #7ab3d0; font-size: 13px; margin-bottom: 10px; }
+.summary-value { color: #e0f3ff; font-size: 28px; font-weight: 700; }
 </style>

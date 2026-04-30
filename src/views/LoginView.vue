@@ -305,6 +305,12 @@ const submitLogin = async () => {
     if (res.code === 200) {
       localStorage.setItem('dt_token', res.data.token)
       localStorage.setItem('dt_username', res.data.username)
+      localStorage.setItem('dt_role', (res.data.role || 'USER').toUpperCase())
+      if (res.data.userId != null) {
+        localStorage.setItem('dt_userId', String(res.data.userId))
+      } else {
+        localStorage.removeItem('dt_userId')
+      }
       ElMessage.success('登录成功，正在跳转...')
       const redirect = route.query.redirect || '/admin'
       router.push(redirect)

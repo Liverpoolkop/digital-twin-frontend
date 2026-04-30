@@ -6,6 +6,17 @@ const http = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
+http.interceptors.request.use(
+  config => {
+    const token = localStorage.getItem('dt_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  err => Promise.reject(err)
+)
+
 http.interceptors.response.use(
   res => res.data,
   err => {
@@ -43,5 +54,38 @@ export const experimentApi = {
     http.put(`/api/experiments/${id}`, data),
 
   remove: id =>
-    http.delete(`/api/experiments/${id}`)
+    http.delete(`/api/experiments/${id}`),
+
+  submit: id =>
+    http.post(`/api/experiments/${id}/submit`)
+}
+
+export const adminExperimentApi = {
+  approve: (id, reviewComment) =>
+    http.post(`/api/admin/experiments/${id}/approve`, { reviewComment }),
+
+  reject: (id, reviewComment) =>
+    http.post(`/api/admin/experiments/${id}/reject`, { reviewComment })
+}
+
+export const adminDatasetApi = {
+  list: (params = {}) =>
+    http.get('/api/admin/datasets', { params }),
+
+  getById: id =>
+    http.get(`/api/admin/datasets/${id}`),
+
+  create: data =>
+    http.post('/api/admin/datasets', data),
+
+  update: (id, data) =>
+    http.put(`/api/admin/datasets/${id}`, data),
+
+  remove: id =>
+    http.delete(`/api/admin/datasets/${id}`)
+}
+
+export const adminDashboardApi = {
+  summary: () =>
+    http.get('/api/admin/dashboard/summary')
 }
