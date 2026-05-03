@@ -30,9 +30,9 @@
           <span>监控统计</span>
         </el-menu-item>
 
-        <el-menu-item v-if="isAdmin" index="dataset">
-          <el-icon><Files /></el-icon>
-          <span>数据集维护</span>
+        <el-menu-item v-if="isAdmin" index="comment">
+          <el-icon><ChatLineRound /></el-icon>
+          <span>评论管理</span>
         </el-menu-item>
       </el-menu>
 
@@ -510,6 +510,86 @@
             />
           </div>
         </section>
+
+        <section v-if="activeMenu === 'comment' && isAdmin" class="card">
+          <div class="card-header card-header-wrap">
+            <div>
+              <span class="card-title">
+                <el-icon><ChatLineRound /></el-icon> 评论审核管理
+              </span>
+              <p class="card-subtitle">管理员可查看待审核评论，执行通过或驳回，并填写审核意见。</p>
+            </div>
+            <div class="card-actions">
+              <el-input
+                v-model="commentKeyword"
+                placeholder="按内容关键词搜索"
+                style="width: 220px"
+                clearable
+                :prefix-icon="Search"
+                @clear="onCommentSearch"
+                @keyup.enter="onCommentSearch"
+              />
+              <el-input-number
+                v-model="commentExperimentId"
+                :min="1"
+                :step="1"
+                controls-position="right"
+                placeholder="实验ID"
+                style="width: 160px"
+              />
+              <el-button type="primary" @click="onCommentSearch">查询</el-button>
+              <el-button :icon="Refresh" @click="fetchCommentList">刷新</el-button>
+            </div>
+          </div>
+
+          <el-table
+            :data="commentRecords"
+            v-loading="commentLoading"
+            stripe
+            style="width: 100%"
+            :header-cell-style="{ background: '#0d1f35', color: '#7ab3d0' }"
+            :row-style="{ background: '#0a1828' }"
+            :cell-style="{ color: '#c8dff0', borderColor: '#1e3a54' }"
+          >
+            <el-table-column prop="id" label="ID" width="80" />
+            <el-table-column prop="nickname" label="发布用户" width="120">
+              <template #default="{ row }">{{ row.nickname || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="关联实验" width="100">
+              <template #default="{ row }">{{ row.experimentId ? `#${row.experimentId}` : '-' }}</template>
+            </el-table-column>
+            <el-table-column label="回复对象" width="130">
+              <template #default="{ row }">{{ row.replyToNickname ? `@${row.replyToNickname}` : '主评论' }}</template>
+            </el-table-column>
+            <el-table-column prop="content" label="评论内容" min-width="320" show-overflow-tooltip />
+            <el-table-column label="时间" width="170">
+              <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="220" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" type="success" text @click="approveComment(row)">
+                  <el-icon><Select /></el-icon> 通过
+                </el-button>
+                <el-button size="small" type="warning" text @click="rejectComment(row)">
+                  <el-icon><CloseBold /></el-icon> 驳回
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div class="table-pagination">
+            <el-pagination
+              v-model:current-page="commentPageNum"
+              v-model:page-size="commentPageSize"
+              :total="commentTotal"
+              :page-sizes="[10, 20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              background
+              @size-change="onCommentPageSizeChange"
+              @current-change="fetchCommentList"
+            />
+          </div>
+        </section>
       </main>
     </div>
 
@@ -637,9 +717,11 @@ import {
   Select,
   CloseBold,
   DataAnalysis,
-  Files
+  Files,
+  ChatLineRound
 } from '@element-plus/icons-vue'
 import {
+  adminCommentApi,
   adminDashboardApi,
   adminDatasetApi,
   adminExperimentApi,
@@ -755,6 +837,9 @@ const onMenuSelect = async index => {
   }
   if (index === 'dataset' && isAdmin.value) {
     await fetchDatasetList()
+  }
+  if (index === 'comment' && isAdmin.value) {
+    await fetchCommentList()
   }
 }
 
@@ -1254,6 +1339,97 @@ const onDatasetPageSizeChange = () => {
   fetchDatasetList()
 }
 
+const commentLoading = ref(false)
+const commentRecords = ref([])
+const commentKeyword = ref('')
+const commentExperimentId = ref(null)
+const commentPageNum = ref(1)
+const commentPageSize = ref(10)
+const commentTotal = ref(0)
+
+const fetchCommentList = async () => {
+  if (!isAdmin.value) return
+  commentLoading.value = true
+  try {
+    const params = {
+      pageNum: commentPageNum.value,
+      pageSize: commentPageSize.value
+    }
+    if (commentKeyword.value?.trim()) params.keyword = commentKeyword.value.trim()
+    if (commentExperimentId.value) params.experimentId = commentExperimentId.value
+
+    const res = await adminCommentApi.list(params)
+    if (res.code === 200 && res.data) {
+      commentRecords.value = res.data.records ?? []
+      commentTotal.value = Number(res.data.total) || 0
+    } else {
+      commentRecords.value = []
+      commentTotal.value = 0
+      ElMessage.error(res.message || '加载待审核评论失败')
+    }
+  } catch {
+    commentRecords.value = []
+    commentTotal.value = 0
+    ElMessage.error('加载待审核评论失败')
+  } finally {
+    commentLoading.value = false
+  }
+}
+
+const onCommentSearch = () => {
+  commentPageNum.value = 1
+  fetchCommentList()
+}
+
+const onCommentPageSizeChange = () => {
+  commentPageNum.value = 1
+  fetchCommentList()
+}
+
+const approveComment = async row => {
+  try {
+    const { value } = await ElMessageBox.prompt('可选填写审核意见', `通过评论 #${row.id}`, {
+      confirmButtonText: '通过',
+      cancelButtonText: '取消',
+      inputPlaceholder: '如：观点清晰，允许公开展示',
+      inputValue: ''
+    })
+    const res = await adminCommentApi.audit(row.id, 'APPROVED', value || '')
+    if (res.code === 200) {
+      ElMessage.success('评论已审核通过')
+      await fetchCommentList()
+    } else {
+      ElMessage.error(res.message || '审核失败')
+    }
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      ElMessage.error('审核失败')
+    }
+  }
+}
+
+const rejectComment = async row => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入驳回原因', `驳回评论 #${row.id}`, {
+      confirmButtonText: '驳回',
+      cancelButtonText: '取消',
+      inputPlaceholder: '如：内容不符合平台规范或表述不完整',
+      inputValidator: val => (val && val.trim() ? true : '请填写驳回原因')
+    })
+    const res = await adminCommentApi.audit(row.id, 'REJECTED', value.trim())
+    if (res.code === 200) {
+      ElMessage.success('评论已驳回')
+      await fetchCommentList()
+    } else {
+      ElMessage.error(res.message || '驳回失败')
+    }
+  } catch (err) {
+    if (err !== 'cancel' && err !== 'close') {
+      ElMessage.error('驳回失败')
+    }
+  }
+}
+
 const datasetDialogVisible = ref(false)
 const datasetIsEdit = ref(false)
 const datasetSubmitting = ref(false)
@@ -1355,6 +1531,7 @@ onMounted(async () => {
   await fetchList()
   if (isAdmin.value) {
     await fetchDashboardSummary()
+    await fetchCommentList()
   }
   window.addEventListener('resize', resizeChart)
 })

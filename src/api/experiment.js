@@ -89,3 +89,31 @@ export const adminDashboardApi = {
   summary: () =>
     http.get('/api/admin/dashboard/summary')
 }
+
+export const commentApi = {
+  listPublic: (params = {}) =>
+    http.get('/api/comments/public', { params }),
+
+  listVisible: (params = {}) =>
+    http.get('/api/comments', { params }),
+
+  listRecent: (params = {}) =>
+    http.get('/api/comments/recent', { params }),
+
+  create: data =>
+    http.post('/api/comments', data),
+
+  like: id =>
+    http.post(`/api/comments/${id}/like`),
+
+  unlike: id =>
+    http.delete(`/api/comments/${id}/like`)
+}
+
+export const adminCommentApi = {
+  list: (params = {}) =>
+    http.get('/api/admin/comments', { params }),
+
+  audit: (id, status, reviewComment) =>
+    http.put(`/api/admin/comments/${id}/audit`, { status, reviewComment })
+}

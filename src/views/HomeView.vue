@@ -12,6 +12,9 @@
       <div class="topnav-links">
         <a href="#about" class="nav-link">关于平台</a>
         <a href="#tech" class="nav-link">技术方案</a>
+        <el-button class="forum-btn" text @click="$router.push('/forum')">
+          平台论坛
+        </el-button>
         <div v-if="isLoggedIn" class="topnav-auth">
           <span class="topnav-user">
             <el-icon><User /></el-icon> {{ username }}
@@ -78,15 +81,59 @@
       </div>
     </section>
 
+    <section class="forum-preview">
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">平台论坛 · 公开讨论弹幕</h2>
+          <p class="section-desc">聚焦已审核公开评论，以轻量滚动信息流展示平台上的最新学术交流。</p>
+        </div>
+        <div class="section-head-actions">
+          <el-button class="outline-btn" @click="$router.push('/forum')">进入论坛</el-button>
+        </div>
+      </div>
+
+      <div v-loading="recentLoading" class="forum-preview-body">
+        <div v-if="bulletComments.length" class="bullet-board">
+          <article
+            v-for="item in bulletComments"
+            :key="item.id"
+            class="bullet-item"
+            :style="{
+              top: item.top,
+              '--bullet-duration': `${item.duration}s`,
+              '--bullet-delay': `${item.delay}s`
+            }"
+            :title="`${item.nickname || '匿名用户'}：${item.content}`"
+          >
+            <span class="bullet-author">{{ item.nickname || '匿名用户' }}</span>
+            <span class="bullet-separator">：</span>
+            <span class="bullet-content">{{ item.preview }}</span>
+          </article>
+        </div>
+
+        <el-empty
+          v-else
+          description="暂无公开讨论，欢迎成为首位分享实验见解的研究者"
+          :image-size="90"
+        />
+      </div>
+    </section>
+
     <footer class="footer">© 2026 DigitalTwin Lab · 动物替代实验研究平台</footer>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Cpu, VideoPlay, DataBoard, Operation, TrendCharts, Monitor, Connection, Opportunity, User, SwitchButton } from '@element-plus/icons-vue'
+import { Cpu, VideoPlay, DataBoard, Operation, TrendCharts, Monitor, Connection, User, SwitchButton } from '@element-plus/icons-vue'
+import { commentApi } from '../api/experiment.js'
+
+const BULLET_CONTENT_LIMIT = 48
+const BULLET_LAYER_POSITIONS = ['10%', '24%', '38%', '52%', '66%', '80%']
+const BULLET_DURATIONS = [18, 21, 24, 27, 30]
+const BULLET_DELAYS = [0, 2.4, 5.2, 8.1, 11.3, 14.5]
 
 const router = useRouter()
 const canvasRef = ref(null)
@@ -94,10 +141,54 @@ let animId = null
 
 const isLoggedIn = ref(false)
 const username = ref('')
+const recentLoading = ref(false)
+const recentComments = ref([])
 
 const syncAuthFromStorage = () => {
   isLoggedIn.value = !!localStorage.getItem('dt_token')
   username.value = localStorage.getItem('dt_username') || ''
+}
+
+const formatTime = value => (value ? String(value).replace('T', ' ').slice(0, 16) : '-')
+const formatBulletContent = value => {
+  const content = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!content) return '暂无内容'
+  return content.length > BULLET_CONTENT_LIMIT ? `${content.slice(0, BULLET_CONTENT_LIMIT)}...` : content
+}
+
+const bulletComments = computed(() => {
+  const usedLayers = []
+  return recentComments.value.map((comment, index) => {
+    const availableLayers = BULLET_LAYER_POSITIONS.filter(layer => layer !== usedLayers[usedLayers.length - 1])
+    const top = availableLayers[index % availableLayers.length] || BULLET_LAYER_POSITIONS[index % BULLET_LAYER_POSITIONS.length]
+    usedLayers.push(top)
+
+    return {
+      ...comment,
+      preview: formatBulletContent(comment.content),
+      top,
+      duration: BULLET_DURATIONS[index % BULLET_DURATIONS.length],
+      delay: BULLET_DELAYS[index % BULLET_DELAYS.length]
+    }
+  })
+})
+
+const loadRecentComments = async () => {
+  recentLoading.value = true
+  try {
+    const res = await commentApi.listRecent({ limit: 10 })
+    if (res.code === 200) {
+      recentComments.value = Array.isArray(res.data) ? res.data : []
+    } else {
+      recentComments.value = []
+      ElMessage.error(res.message || '加载最新评论失败')
+    }
+  } catch {
+    recentComments.value = []
+    ElMessage.error('加载最新评论失败')
+  } finally {
+    recentLoading.value = false
+  }
 }
 
 const handleEnter = () => {
@@ -117,6 +208,8 @@ const handleLogout = async () => {
   }
   localStorage.removeItem('dt_token')
   localStorage.removeItem('dt_username')
+  localStorage.removeItem('dt_userId')
+  localStorage.removeItem('dt_role')
   syncAuthFromStorage()
   ElMessage.success('已退出登录')
 }
@@ -191,6 +284,7 @@ const initParticles = () => {
 onMounted(() => {
   syncAuthFromStorage()
   initParticles()
+  loadRecentComments()
   window.addEventListener('focus', syncAuthFromStorage)
 })
 onUnmounted(() => {
@@ -249,6 +343,15 @@ onUnmounted(() => {
   transition: color 0.2s;
 }
 .nav-link:hover { color: #4fc3f7; }
+
+.forum-btn {
+  color: #7ab3d0 !important;
+  padding: 0 !important;
+}
+.forum-btn:hover {
+  color: #4fc3f7 !important;
+  background: transparent !important;
+}
 
 .login-btn {
   background: transparent !important;
@@ -446,6 +549,112 @@ onUnmounted(() => {
   font-size: 14px;
   color: #4fc3f7;
   background: rgba(79,195,247,0.06);
+}
+
+.forum-preview {
+  position: relative;
+  z-index: 1;
+  padding: 20px 60px 80px;
+}
+
+.section-head {
+  max-width: 1100px;
+  margin: 0 auto 24px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.section-desc {
+  margin-top: 10px;
+  color: #6e98b8;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.section-head-actions {
+  display: flex;
+  align-items: center;
+}
+
+.forum-preview-body {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.bullet-board {
+  position: relative;
+  overflow: hidden;
+  min-height: 280px;
+  border-radius: 20px;
+  border: 1px solid rgba(79,195,247,0.14);
+  background: linear-gradient(180deg, rgba(7, 20, 35, 0.42), rgba(8, 27, 46, 0.28));
+  backdrop-filter: blur(10px);
+}
+
+.bullet-board::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(2,13,26,0.82) 0%, rgba(2,13,26,0) 10%, rgba(2,13,26,0) 90%, rgba(2,13,26,0.82) 100%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.bullet-item {
+  position: absolute;
+  left: 100%;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  max-width: 420px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(10, 31, 48, 0.72);
+  border: 1px solid rgba(79,195,247,0.16);
+  color: #c8dff0;
+  box-shadow: 0 8px 24px rgba(2, 13, 26, 0.18);
+  white-space: nowrap;
+  animation: bulletFloat var(--bullet-duration, 24s) linear infinite;
+  animation-delay: var(--bullet-delay, 0s);
+  animation-fill-mode: both;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s, transform 0.2s;
+}
+
+.bullet-item:hover {
+  animation-play-state: paused;
+  border-color: rgba(79,195,247,0.34);
+  background: rgba(13, 33, 53, 0.9);
+  box-shadow: 0 10px 28px rgba(79,195,247,0.16);
+  transform: scale(1.02);
+}
+
+.bullet-author {
+  color: #4fc3f7;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.bullet-separator {
+  color: #7ab3d0;
+  flex: 0 0 auto;
+}
+
+.bullet-content {
+  min-width: 0;
+  color: #c8dff0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes bulletFloat {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(calc(-100vw - 520px));
+  }
 }
 
 /* ─── 页脚 ─── */
