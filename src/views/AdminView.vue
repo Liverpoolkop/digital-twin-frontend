@@ -142,7 +142,11 @@
               <template #default="{ row }">{{ animalLabel(row.animalType) }}</template>
             </el-table-column>
             <el-table-column prop="chemicalName" label="化学物质" width="130" show-overflow-tooltip />
-            <el-table-column prop="indicatorName" label="观测指标" width="150" show-overflow-tooltip />
+            <el-table-column label="观测指标" width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.simulationMode === 'MULTI_ORGAN' ? '多器官' : row.indicatorName }}
+              </template>
+            </el-table-column>
             <el-table-column prop="reviewComment" label="审批意见" min-width="100" show-overflow-tooltip>
               <template #default="{ row }">{{ row.reviewComment || '-' }}</template>
             </el-table-column>
@@ -269,6 +273,21 @@
                     <el-input :model-value="linkedExperimentLabel" disabled />
                   </el-form-item>
 
+                  <el-form-item label="仿真模式">
+                    <el-radio-group v-model="simMode">
+                      <el-radio value="single">单指标仿真</el-radio>
+                      <el-radio value="multi-organ">多器官协同仿真</el-radio>
+                    </el-radio-group>
+                  </el-form-item>
+
+                  <el-form-item v-if="simMode === 'multi-organ'" label="目标器官" prop="organs">
+                    <el-checkbox-group v-model="simForm.organs">
+                      <el-checkbox label="Heart">心脏</el-checkbox>
+                      <el-checkbox label="Liver">肝脏</el-checkbox>
+                      <el-checkbox label="Lung">肺</el-checkbox>
+                    </el-checkbox-group>
+                  </el-form-item>
+
                   <el-form-item label="目标物种" prop="animalType">
                     <el-select v-model="simForm.animalType" placeholder="选择物种" style="width: 100%">
                       <el-option label="🐭 小白鼠（MOUSE）" value="MOUSE" />
@@ -283,13 +302,13 @@
                     </el-select>
                   </el-form-item>
 
-                  <el-form-item label="观测指标" prop="indicatorName">
+                  <el-form-item v-if="simMode === 'single'" label="观测指标" prop="indicatorName">
                     <el-select v-model="simForm.indicatorName" placeholder="选择指标名称" style="width: 100%">
                       <el-option v-for="ind in INDICATOR_OPTIONS" :key="ind" :label="ind" :value="ind" />
                     </el-select>
                   </el-form-item>
 
-                  <el-form-item label="环境温度筛选范围（℃）" prop="tempRange">
+                  <el-form-item v-if="simMode === 'single'" label="环境温度筛选范围（℃）" prop="tempRange">
                     <div class="slider-wrap">
                       <el-slider
                         v-model="simForm.tempRange"
@@ -311,6 +330,7 @@
                       <el-option label="📈 简单线性回归（LINEAR）" value="LINEAR" />
                       <el-option label="📉 二次多项式回归（POLYNOMIAL）" value="POLYNOMIAL" />
                       <el-option label="🔬 受体饱和对数回归（LOGARITHMIC）" value="LOGARITHMIC" />
+                      <el-option label="🤖 AI智能预测（对比模式）" value="AI" />
                     </el-select>
                   </el-form-item>
 
@@ -330,10 +350,10 @@
                     type="primary"
                     :loading="simLoading"
                     :disabled="!canRunCurrentSimulation"
-                    @click="runSimulation"
+                    @click="simMode === 'single' ? runSimulation() : runMultiOrganSimulation()"
                   >
                     <el-icon v-if="!simLoading"><VideoPlay /></el-icon>
-                    {{ simLoading ? '仿真计算中...' : '启动数字孪生计算' }}
+                    {{ simLoading ? '仿真计算中...' : (simMode === 'single' ? '启动数字孪生计算' : '启动多器官协同仿真') }}
                   </el-button>
                 </el-form>
               </el-card>
@@ -367,7 +387,7 @@
                 </div>
 
                 <div v-if="simResult && !simLoading" class="sim-result">
-                  <div class="result-peak">
+                  <div v-if="simMode === 'single'" class="result-peak">
                     <div class="result-peak-label">
                       预测指标：{{ simResult.indicatorName || simForm.indicatorName || '生理指标' }}
                     </div>
@@ -379,6 +399,15 @@
                       <el-tag size="small" type="success" effect="dark">{{ animalLabel(simResult.targetAnimal) }}</el-tag>
                       <el-tag size="small" type="info" effect="dark">{{ simResult.targetChemical }}</el-tag>
                       <el-tag size="small" type="warning" effect="dark">{{ simResult.selectedModel }}</el-tag>
+                    </div>
+                  </div>
+                  <div v-else class="result-peak">
+                    <div class="result-peak-label">多器官协同仿真结果</div>
+                    <div class="result-meta">
+                      <el-tag size="small" type="success" effect="dark">{{ animalLabel(simResult.targetAnimal) }}</el-tag>
+                      <el-tag size="small" type="info" effect="dark">{{ simResult.targetChemical }}</el-tag>
+                      <el-tag size="small" type="warning" effect="dark">{{ simResult.selectedModel }}</el-tag>
+                      <el-tag size="small" type="primary" effect="dark">剂量: {{ simResult.targetDosage }} mg/kg</el-tag>
                     </div>
                   </div>
                   <div ref="simChartRef" class="sim-chart-box" />
@@ -622,10 +651,23 @@
             <el-option v-for="c in CHEMICAL_OPTIONS" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
-        <el-form-item label="观测指标" prop="indicatorName">
+        <el-form-item label="仿真模式" prop="simulationMode">
+          <el-radio-group v-model="form.simulationMode">
+            <el-radio value="SINGLE">单指标仿真</el-radio>
+            <el-radio value="MULTI_ORGAN">多器官协同仿真</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="form.simulationMode === 'SINGLE'" label="观测指标" prop="indicatorName">
           <el-select v-model="form.indicatorName" placeholder="选择观测指标" style="width: 100%">
             <el-option v-for="ind in INDICATOR_OPTIONS" :key="ind" :label="ind" :value="ind" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="form.simulationMode === 'MULTI_ORGAN'" label="目标器官" prop="targetOrgans">
+          <el-checkbox-group v-model="form.targetOrgans">
+            <el-checkbox label="Heart">心脏</el-checkbox>
+            <el-checkbox label="Liver">肝脏</el-checkbox>
+            <el-checkbox label="Lung">肺</el-checkbox>
+          </el-checkbox-group>
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="form.description" type="textarea" :rows="3" placeholder="可选：方案说明" />
@@ -922,14 +964,24 @@ const form = reactive({
   name: '',
   animalType: '',
   chemicalName: '',
+  simulationMode: 'SINGLE',
   indicatorName: '',
-  description: ''
+  targetOrgans: [],
+  description: '',
+  simulationMode: 'SINGLE' // 【新增这一行】赋予默认值
+})
+
+watch(() => form.simulationMode, (newMode) => {
+  if (newMode === 'MULTI_ORGAN') {
+    form.indicatorName = '血清ALT(U/L)'
+  }
 })
 
 const rules = {
   name: [{ required: true, message: '请输入实验名称', trigger: 'blur' }],
   animalType: [{ required: true, message: '请选择实验动物', trigger: 'change' }],
   chemicalName: [{ required: true, message: '请选择化学物质', trigger: 'change' }],
+  simulationMode: [{ required: true, message: '请选择仿真模式', trigger: 'change' }],
   indicatorName: [{ required: true, message: '请选择观测指标', trigger: 'change' }]
 }
 
@@ -938,8 +990,11 @@ const resetForm = () => {
     name: '',
     animalType: '',
     chemicalName: '',
+    simulationMode: 'SINGLE',
     indicatorName: '',
-    description: ''
+    targetOrgans: [],
+    description: '',
+    simulationMode: 'SINGLE' // 【新增这一行】清空表单时也恢复默认值
   })
   editId.value = null
 }
@@ -976,19 +1031,42 @@ const openEdit = row => {
     name: row.name,
     animalType: row.animalType,
     chemicalName: row.chemicalName,
-    indicatorName: row.indicatorName,
-    description: row.description || ''
+    simulationMode: row.simulationMode || 'SINGLE',
+    indicatorName: row.indicatorName || '',
+    targetOrgans: row.targetOrgans ? row.targetOrgans.split(',') : [],
+    description: row.description || '',
+    simulationMode: row.simulationMode || 'SINGLE' // 【新增这一行】
   })
   dialogVisible.value = true
 }
 
 const submitForm = async () => {
   await formRef.value.validate()
+
+  // 手动验证模式相关字段
+  if (form.simulationMode === 'SINGLE' && !form.indicatorName) {
+    ElMessage.error('单指标模式必须选择观测指标')
+    return
+  }
+  if (form.simulationMode === 'MULTI_ORGAN' && (!form.targetOrgans || form.targetOrgans.length === 0)) {
+    ElMessage.error('多器官模式必须至少选择一个器官')
+    return
+  }
+
   submitting.value = true
   try {
+    const payload = {
+      name: form.name,
+      animalType: form.animalType,
+      chemicalName: form.chemicalName,
+      simulationMode: form.simulationMode,
+      indicatorName: form.indicatorName,
+      targetOrgans: form.simulationMode === 'MULTI_ORGAN' ? form.targetOrgans.join(',') : null,
+      description: form.description
+    }
     const res = isEdit.value
-      ? await experimentApi.update(editId.value, { ...form })
-      : await experimentApi.create({ ...form })
+      ? await experimentApi.update(editId.value, payload)
+      : await experimentApi.create(payload)
 
     if (res.code === 200) {
       ElMessage.success(isEdit.value ? '实验信息已更新' : '实验创建成功，当前状态为草稿')
@@ -997,8 +1075,9 @@ const submitForm = async () => {
     } else {
       ElMessage.error(res.message || '操作失败，请稍后重试')
     }
-  } catch {
-    ElMessage.error('操作失败，请稍后重试')
+  } catch (err) {
+    console.error('提交失败:', err)
+    ElMessage.error('操作失败，请检查控制台查看详细错误')
   } finally {
     submitting.value = false
   }
@@ -1100,6 +1179,8 @@ const simResult = ref(null)
 let simChartInstance = null
 const resizeChart = () => simChartInstance?.resize()
 
+const simMode = ref('single')
+
 const simForm = reactive({
   experimentId: null,
   animalType: '',
@@ -1107,7 +1188,8 @@ const simForm = reactive({
   indicatorName: '',
   tempRange: [15, 35],
   algorithmModel: '',
-  targetDosage: 1.0
+  targetDosage: 1.0,
+  organs: []
 })
 
 const tempMarks = { 0: '0℃', 15: '15', 25: '25', 35: '35', 50: '50℃' }
@@ -1128,6 +1210,8 @@ const resetSimulationForm = () => {
   simForm.tempRange = [15, 35]
   simForm.algorithmModel = ''
   simForm.targetDosage = 1.0
+  simForm.organs = []
+  simMode.value = 'single'
   linkedSimulationExperiment.value = null
   simResult.value = null
 }
@@ -1143,7 +1227,7 @@ const runSimulation = async () => {
   simResult.value = null
 
   try {
-    const res = await simulationApi.run({
+    const payload = {
       experimentId: simForm.experimentId ?? undefined,
       animalType: simForm.animalType,
       chemicalName: simForm.chemicalName,
@@ -1152,17 +1236,76 @@ const runSimulation = async () => {
       maxTemp: simForm.tempRange[1],
       algorithmModel: simForm.algorithmModel,
       targetDosage: simForm.targetDosage
+    }
+
+    // AI模式：调用AI对比接口
+    if (simForm.algorithmModel === 'AI') {
+      const res = await simulationApi.runAiComparison(payload)
+      if (res.code === 200) {
+        simResult.value = res.data
+        ElMessage.success('AI对比模式仿真完成！')
+        await nextTick()
+        requestAnimationFrame(() => {
+          renderAiComparisonChart(res.data, simForm.indicatorName)
+        })
+      } else {
+        ElMessage.error(res.message || 'AI对比模式返回异常')
+      }
+    } else {
+      // 传统模式：调用原有接口
+      const res = await simulationApi.run(payload)
+      if (res.code === 200) {
+        simResult.value = res.data
+        ElMessage.success('仿真计算完成！')
+        await nextTick()
+        requestAnimationFrame(() => {
+          renderSimChart(Number(res.data.predictedValue), res.data.indicatorName || simForm.indicatorName)
+        })
+      } else {
+        ElMessage.error(res.message || '仿真引擎返回异常')
+      }
+    }
+  } catch {
+    ElMessage.error('请求失败，请检查后端服务是否已启动')
+  } finally {
+    simLoading.value = false
+  }
+}
+
+const runMultiOrganSimulation = async () => {
+  if (!canRunCurrentSimulation.value) {
+    ElMessage.warning('普通用户只能对审批通过的实验发起仿真')
+    return
+  }
+
+  if (!simForm.organs || simForm.organs.length === 0) {
+    ElMessage.warning('请至少选择一个目标器官')
+    return
+  }
+
+  await simFormRef.value.validate()
+  simLoading.value = true
+  simResult.value = null
+
+  try {
+    const res = await simulationApi.runMultiOrgan({
+      experimentId: simForm.experimentId ?? undefined,
+      targetAnimal: simForm.animalType,
+      targetChemical: simForm.chemicalName,
+      organs: simForm.organs,
+      targetDosage: simForm.targetDosage,
+      selectedModel: simForm.algorithmModel
     })
 
     if (res.code === 200) {
       simResult.value = res.data
-      ElMessage.success('仿真计算完成！')
+      ElMessage.success('多器官仿真计算完成！')
       await nextTick()
       requestAnimationFrame(() => {
-        renderSimChart(Number(res.data.predictedValue), res.data.indicatorName || simForm.indicatorName)
+        renderMultiOrganCharts(res.data)
       })
     } else {
-      ElMessage.error(res.message || '仿真引擎返回异常')
+      ElMessage.error(res.message || '多器官仿真引擎返回异常')
     }
   } catch {
     ElMessage.error('请求失败，请检查后端服务是否已启动')
@@ -1235,14 +1378,204 @@ const renderSimChart = (peak, indicatorName) => {
   })
 }
 
+const renderAiComparisonChart = (data, indicatorName) => {
+  if (!simChartRef.value) return
+  simChartInstance?.dispose()
+  simChartInstance = echarts.init(simChartRef.value, 'dark')
+
+  // 提取x轴数据（时间点）
+  const xData = []
+  for (let t = 0; t <= 12; t += 0.5) {
+    xData.push(`${t.toFixed(1)}h`)
+  }
+
+  // 构建series数组
+  const seriesData = []
+
+  // AI预测曲线（如果存在）
+  if (data.aiCurve && data.aiCurve.length > 0) {
+    seriesData.push({
+      name: 'AI预测',
+      type: 'line',
+      data: data.aiCurve.map(p => p.value),
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
+      lineStyle: { color: '#ff6b6b', width: 2.5 },
+      itemStyle: { color: '#ff6b6b' }
+    })
+  }
+
+  // 线性拟合曲线
+  if (data.linearCurve && data.linearCurve.length > 0) {
+    seriesData.push({
+      name: '线性拟合',
+      type: 'line',
+      data: data.linearCurve.map(p => p.value),
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
+      lineStyle: { color: '#4ecdc4', width: 2 },
+      itemStyle: { color: '#4ecdc4' }
+    })
+  }
+
+  // 多项式拟合曲线
+  if (data.polynomialCurve && data.polynomialCurve.length > 0) {
+    seriesData.push({
+      name: '多项式拟合',
+      type: 'line',
+      data: data.polynomialCurve.map(p => p.value),
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
+      lineStyle: { color: '#45b7d1', width: 2 },
+      itemStyle: { color: '#45b7d1' }
+    })
+  }
+
+  // 对数拟合曲线
+  if (data.logarithmicCurve && data.logarithmicCurve.length > 0) {
+    seriesData.push({
+      name: '对数拟合',
+      type: 'line',
+      data: data.logarithmicCurve.map(p => p.value),
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
+      lineStyle: { color: '#96ceb4', width: 2 },
+      itemStyle: { color: '#96ceb4' }
+    })
+  }
+
+  simChartInstance.setOption({
+    backgroundColor: 'transparent',
+    title: {
+      text: data.predictionSource === 'AI_SUCCESS' ? 'AI对比模式（4条曲线）' : 'AI预测失败，仅显示数学拟合',
+      left: 'center',
+      top: 10,
+      textStyle: { color: '#4a7fa5', fontSize: 13 }
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#0d2135',
+      borderColor: '#1e4a6e',
+      textStyle: { color: '#c8dff0' }
+    },
+    legend: {
+      data: seriesData.map(s => s.name),
+      top: 35,
+      textStyle: { color: '#4a7fa5' }
+    },
+    grid: { left: '4%', right: '4%', bottom: '12%', top: '70px', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      axisLine: { lineStyle: { color: '#1e3a54' } },
+      axisLabel: { color: '#4a7fa5', fontSize: 11, interval: 3 }
+    },
+    yAxis: {
+      type: 'value',
+      name: indicatorName || '生理指标值',
+      nameTextStyle: { color: '#4a7fa5', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#0f2d45', type: 'dashed' } },
+      axisLabel: { color: '#4a7fa5' }
+    },
+    series: seriesData
+  })
+}
+
+const renderMultiOrganCharts = (data) => {
+  if (!simChartRef.value) return
+  simChartInstance?.dispose()
+  simChartInstance = echarts.init(simChartRef.value, 'dark')
+
+  const organResults = data.organResults || {}
+  const LAMBDA = 0.12
+  const HOURS = 12
+  const STEP = 0.5
+  const xData = []
+
+  for (let t = 0; t <= HOURS; t += STEP) {
+    xData.push(`${t.toFixed(1)}h`)
+  }
+
+  const seriesData = []
+  const legendData = []
+  const colors = ['#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8', '#4db6ac']
+  let colorIndex = 0
+
+  Object.entries(organResults).forEach(([organ, indicators]) => {
+    indicators.forEach(ind => {
+      const seriesName = `${organ}-${ind.indicatorName}`
+      legendData.push(seriesName)
+
+      const yData = []
+      const peak = ind.predictedValue
+      for (let t = 0; t <= HOURS; t += STEP) {
+        yData.push(+(peak * Math.exp(-LAMBDA * t)).toFixed(4))
+      }
+
+      const color = colors[colorIndex % colors.length]
+      colorIndex++
+
+      seriesData.push({
+        name: seriesName,
+        type: 'line',
+        data: yData,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 4,
+        lineStyle: { color, width: 2 },
+        itemStyle: { color }
+      })
+    })
+  })
+
+  simChartInstance.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#0d2135',
+      borderColor: '#1e4a6e',
+      textStyle: { color: '#c8dff0' }
+    },
+    legend: {
+      data: legendData,
+      textStyle: { color: '#4a7fa5', fontSize: 11 },
+      top: 10,
+      type: 'scroll'
+    },
+    grid: { left: '4%', right: '4%', bottom: '12%', top: '15%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      axisLine: { lineStyle: { color: '#1e3a54' } },
+      axisLabel: { color: '#4a7fa5', fontSize: 11, interval: 3 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '指标值',
+      nameTextStyle: { color: '#4a7fa5', fontSize: 11 },
+      splitLine: { lineStyle: { color: '#0f2d45', type: 'dashed' } },
+      axisLabel: { color: '#4a7fa5' }
+    },
+    series: seriesData
+  })
+}
+
 watch(activeMenu, async val => {
   if (val === 'simulation' && simResult.value) {
     await nextTick()
     requestAnimationFrame(() => {
-      renderSimChart(
-        Number(simResult.value.predictedValue),
-        simResult.value.indicatorName || simForm.indicatorName
-      )
+      if (simMode.value === 'multi-organ') {
+        renderMultiOrganCharts(simResult.value)
+      } else {
+        renderSimChart(
+          Number(simResult.value.predictedValue),
+          simResult.value.indicatorName || simForm.indicatorName
+        )
+      }
     })
   }
 })
@@ -1256,11 +1589,22 @@ const launchSimFromExp = row => {
   simForm.experimentId = row.id
   simForm.animalType = row.animalType
   simForm.chemicalName = row.chemicalName
-  simForm.indicatorName = row.indicatorName
   simForm.algorithmModel = ''
   simForm.tempRange = [15, 35]
   simForm.targetDosage = 1.0
   simResult.value = null
+
+  // 根据实验模式设置仿真模式和相关字段
+  if (row.simulationMode === 'MULTI_ORGAN') {
+    simMode.value = 'multi-organ'
+    simForm.organs = row.targetOrgans ? row.targetOrgans.split(',') : []
+    simForm.indicatorName = ''
+  } else {
+    simMode.value = 'single'
+    simForm.indicatorName = row.indicatorName || ''
+    simForm.organs = []
+  }
+
   activeMenu.value = 'simulation'
   ElMessage.info(`已关联方案「${row.name}」，请设置算法与剂量后启动仿真`)
 }

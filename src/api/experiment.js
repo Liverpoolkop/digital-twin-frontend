@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const http = axios.create({
   baseURL: 'http://localhost:8080',
-  timeout: 10000,
+  timeout: 100000,  // 100秒，适配AI调用的长时间等待
   headers: { 'Content-Type': 'application/json' }
 })
 
@@ -34,7 +34,9 @@ export const authApi = {
 }
 
 export const simulationApi = {
-  run: (params) => http.post('/api/simulation/run', params)
+  run: (params) => http.post('/api/simulation/run', params),
+  runMultiOrgan: (params) => http.post('/api/simulation/run-multi-organ', params),
+  runAiComparison: (params) => http.post('/api/simulation/run-ai-comparison', params)
 }
 
 export const experimentApi = {
