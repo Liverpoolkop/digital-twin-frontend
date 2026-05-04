@@ -385,8 +385,8 @@
                   </div>
                   <p class="loading-text">数字孪生引擎计算中...</p>
                 </div>
-
-                <div v-if="simResult && !simLoading" class="sim-result">
+                //11111111111
+                <div v-if="(simResult || multiIndicatorAiResult) && !simLoading" class="sim-result">
                   <div v-if="simMode === 'single'" class="result-peak">
                     <div class="result-peak-label">
                       预测指标：{{ simResult.indicatorName || simForm.indicatorName || '生理指标' }}
@@ -410,7 +410,20 @@
                       <el-tag size="small" type="primary" effect="dark">剂量: {{ simResult.targetDosage }} mg/kg</el-tag>
                     </div>
                   </div>
-                  <div ref="simChartRef" class="sim-chart-box" />
+                  <!-- 多指标AI对比模式：显示Tab切换 -->
+                  <el-tabs v-if="multiIndicatorAiResult" v-model="activeIndicatorTab" type="card">
+                    <el-tab-pane
+                      v-for="(indicator, index) in multiIndicatorAiResult.indicators"
+                      :key="index"
+                      :label="indicator.indicatorName"
+                      :name="String(index)"
+                    >
+                      <div :id="`indicator-chart-${index}`" class="sim-chart-box" />
+                    </el-tab-pane>
+                  </el-tabs>
+
+                  <!-- 单指标模式：显示单个图表 -->
+                  <div v-else ref="simChartRef" class="sim-chart-box" />
                 </div>
               </el-card>
             </el-col>
@@ -1177,9 +1190,22 @@ const simChartRef = ref(null)
 const simLoading = ref(false)
 const simResult = ref(null)
 let simChartInstance = null
+let multiIndicatorChartInstances = [] // 多指标AI对比图表实例数组
 const resizeChart = () => simChartInstance?.resize()
 
 const simMode = ref('single')
+
+// 器官到指标的映射关系
+const organToIndicators = {
+  'Heart': ['Heart_Rate'],
+  'Liver': ['ALT', 'AST'],
+  'Lung': ['Respiratory_Rate']
+}
+
+// 多指标AI对比结果
+const multiIndicatorAiResult = ref(null)
+const activeIndicatorTab = ref('0')
+const renderedChartTabs = new Set() // 跟踪已渲染的图表
 
 const simForm = reactive({
   experimentId: null,
@@ -1286,26 +1312,66 @@ const runMultiOrganSimulation = async () => {
   await simFormRef.value.validate()
   simLoading.value = true
   simResult.value = null
+  multiIndicatorAiResult.value = null
 
   try {
-    const res = await simulationApi.runMultiOrgan({
-      experimentId: simForm.experimentId ?? undefined,
-      targetAnimal: simForm.animalType,
-      targetChemical: simForm.chemicalName,
-      organs: simForm.organs,
-      targetDosage: simForm.targetDosage,
-      selectedModel: simForm.algorithmModel
-    })
-
-    if (res.code === 200) {
-      simResult.value = res.data
-      ElMessage.success('多器官仿真计算完成！')
-      await nextTick()
-      requestAnimationFrame(() => {
-        renderMultiOrganCharts(res.data)
+    // AI模式：调用多指标AI对比接口
+    if (simForm.algorithmModel === 'AI') {
+      // 将器官转换为指标列表
+      const indicatorNames = []
+      simForm.organs.forEach(organ => {
+        const indicators = organToIndicators[organ] || []
+        indicatorNames.push(...indicators)
       })
+
+      const res = await simulationApi.runMultiIndicatorAiComparison({
+        animalType: simForm.animalType,
+        chemicalName: simForm.chemicalName,
+        indicatorNames: indicatorNames,
+        targetDosage: simForm.targetDosage,
+        minTemp: simForm.tempRange[0],
+        maxTemp: simForm.tempRange[1]
+      })
+
+      if (res.code === 200) {//2222222222
+        simResult.value = res.data; // 💡 必须赋值，用于开启外层 v-if 和显示头部标签
+        multiIndicatorAiResult.value = res.data;
+        activeIndicatorTab.value = '0'; // 💡 强制重置到第一个 Tab
+        
+        ElMessage.success('多指标AI对比完成！');
+        await nextTick();
+        // 3. 【关键】调用全量重置函数，清空之前的 Set 缓存
+        requestAnimationFrame(() => {
+          renderMultiIndicatorAiTabs(res.data);
+        });
+        // 延迟渲染，确保 DOM 已经根据数据生成
+        setTimeout(() => {
+          renderSingleIndicatorChart(0);
+        }, 200);
+      } else {
+        ElMessage.error(res.message || '多指标AI对比返回异常')
+      }
     } else {
-      ElMessage.error(res.message || '多器官仿真引擎返回异常')
+      // 传统模式：调用原有多器官接口
+      const res = await simulationApi.runMultiOrgan({
+        experimentId: simForm.experimentId ?? undefined,
+        targetAnimal: simForm.animalType,
+        targetChemical: simForm.chemicalName,
+        organs: simForm.organs,
+        targetDosage: simForm.targetDosage,
+        selectedModel: simForm.algorithmModel
+      })
+
+      if (res.code === 200) {
+        simResult.value = res.data
+        ElMessage.success('多器官仿真计算完成！')
+        await nextTick()
+        requestAnimationFrame(() => {
+          renderMultiOrganCharts(res.data)
+        })
+      } else {
+        ElMessage.error(res.message || '多器官仿真引擎返回异常')
+      }
     }
   } catch {
     ElMessage.error('请求失败，请检查后端服务是否已启动')
@@ -1564,6 +1630,67 @@ const renderMultiOrganCharts = (data) => {
   })
 }
 
+const renderMultiIndicatorAiTabs = (data) => {
+  multiIndicatorChartInstances.forEach(instance => instance?.dispose())
+  multiIndicatorChartInstances = []
+  renderedChartTabs.clear()
+  if (!data || !data.indicators || data.indicators.length === 0) return
+
+  activeIndicatorTab.value = '0'
+
+  nextTick(() => {
+    renderSingleIndicatorChart(0)
+  })
+}
+
+const renderSingleIndicatorChart = (index) => {
+  if (!multiIndicatorAiResult.value?.indicators) return
+  if (renderedChartTabs.has(index)) return
+
+  const indicator = multiIndicatorAiResult.value.indicators[index]
+  if (!indicator) return
+
+  nextTick(() => {
+    const chartRef = document.getElementById(`indicator-chart-${index}`)
+    if (!chartRef) {
+      console.warn(`Chart container not found for index ${index}`)
+      return
+    }
+
+    const chartInstance = echarts.init(chartRef, 'dark')
+    multiIndicatorChartInstances[index] = chartInstance
+    renderedChartTabs.add(index)
+
+    const xData = []
+    for (let t = 0; t <= 12; t += 0.5) xData.push(`${t.toFixed(1)}h`)
+
+    const seriesData = []
+    if (indicator.aiCurve?.length > 0) {
+      seriesData.push({ name: 'AI预测', type: 'line', data: indicator.aiCurve.map(p => p.value), smooth: true, lineStyle: { color: '#ff6b6b', width: 2.5 } })
+    }
+    if (indicator.linearCurve?.length > 0) {
+      seriesData.push({ name: '线性', type: 'line', data: indicator.linearCurve.map(p => p.value), smooth: true, lineStyle: { color: '#4ecdc4', width: 2 } })
+    }
+    if (indicator.polynomialCurve?.length > 0) {
+      seriesData.push({ name: '多项式', type: 'line', data: indicator.polynomialCurve.map(p => p.value), smooth: true, lineStyle: { color: '#45b7d1', width: 2 } })
+    }
+    if (indicator.logarithmicCurve?.length > 0) {
+      seriesData.push({ name: '对数', type: 'line', data: indicator.logarithmicCurve.map(p => p.value), smooth: true, lineStyle: { color: '#96ceb4', width: 2 } })
+    }
+
+    chartInstance.setOption({
+      backgroundColor: 'transparent',
+      title: { text: indicator.indicatorName, left: 'center', textStyle: { color: '#4a7fa5', fontSize: 13 } },
+      tooltip: { trigger: 'axis' },
+      legend: { data: seriesData.map(s => s.name), top: 30, textStyle: { color: '#4a7fa5' } },
+      grid: { left: '10%', right: '10%', top: '20%', bottom: '15%' },
+      xAxis: { type: 'category', data: xData, axisLabel: { color: '#4a7fa5' } },
+      yAxis: { type: 'value', axisLabel: { color: '#4a7fa5' } },
+      series: seriesData
+    })
+  })
+}
+
 watch(activeMenu, async val => {
   if (val === 'simulation' && simResult.value) {
     await nextTick()
@@ -1579,6 +1706,19 @@ watch(activeMenu, async val => {
     })
   }
 })
+//33333333
+watch(activeIndicatorTab, (newTab) => {
+  if (multiIndicatorAiResult.value) {
+    nextTick(() => {
+      renderSingleIndicatorChart(Number(newTab));
+      // 💡 关键：延迟执行 resize，解决 ECharts 在隐藏容器中宽度为 0 的问题
+      setTimeout(() => {
+        const instance = multiIndicatorChartInstances[Number(newTab)];
+        if (instance) instance.resize();
+      }, 100);
+    });
+  }
+}, { immediate: true }); // 💡 加上这个，确保第一次赋值也能画图
 
 const launchSimFromExp = row => {
   if (!canLaunchSimulation(row)) {
