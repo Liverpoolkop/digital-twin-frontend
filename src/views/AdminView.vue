@@ -385,7 +385,6 @@
                   </div>
                   <p class="loading-text">数字孪生引擎计算中...</p>
                 </div>
-                //11111111111
                 <div v-if="(simResult || multiIndicatorAiResult) && !simLoading" class="sim-result">
                   <div v-if="simMode === 'single'" class="result-peak">
                     <div class="result-peak-label">
@@ -410,6 +409,25 @@
                       <el-tag size="small" type="primary" effect="dark">剂量: {{ simResult.targetDosage }} mg/kg</el-tag>
                     </div>
                   </div>
+
+                  <!-- 器官受损评估热力图 -->
+                  <div v-if="simMode === 'multi-organ' && simForm.algorithmModel !== 'AI' && simResult?.organDamageScores">
+                    <div class="heatmap-title">
+                      <el-icon><TrendCharts /></el-icon>
+                      器官受损评估热力图
+                    </div>
+                    <OrganHeatmap :damage-scores="simResult.organDamageScores" />
+                  </div>
+
+                  <!-- AI模式器官受损评估热力图 -->
+                  <div v-if="multiIndicatorAiResult?.organDamageScores" class="heatmap-section">
+                    <div class="heatmap-title">
+                      <el-icon><TrendCharts /></el-icon>
+                      器官受损评估热力图
+                    </div>
+                    <OrganHeatmap :damage-scores="multiIndicatorAiResult.organDamageScores" />
+                  </div>
+
                   <!-- 多指标AI对比模式：显示Tab切换 -->
                   <el-tabs v-if="multiIndicatorAiResult" v-model="activeIndicatorTab" type="card">
                     <el-tab-pane
@@ -752,6 +770,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
+import OrganHeatmap from '../components/OrganHeatmap.vue'
 import {
   Plus,
   Edit,
@@ -2261,6 +2280,26 @@ body {
 .result-unit { font-size: 16px; font-weight: 400; color: #5a8fab; margin-left: 6px; }
 .result-meta { display: flex; justify-content: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .sim-chart-box { flex: 1; min-height: 260px; }
+
+.heatmap-section {
+  background: rgba(79,195,247,0.06);
+  border: 1px solid rgba(79,195,247,0.2);
+  border-radius: 10px;
+  padding: 20px;
+  margin-top: 16px;
+}
+
+.heatmap-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #4fc3f7;
+  margin-bottom: 16px;
+  letter-spacing: 1px;
+}
+
 
 .summary-grid {
   display: grid;

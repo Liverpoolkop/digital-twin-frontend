@@ -2,7 +2,7 @@ import axios from 'axios'
 
 const http = axios.create({
   baseURL: 'http://localhost:8080',
-  timeout: 300000,  // 100秒，适配AI调用的长时间等待
+  timeout: 300000,  // 300秒，适配AI调用的长时间等待
   headers: { 'Content-Type': 'application/json' }
 })
 
